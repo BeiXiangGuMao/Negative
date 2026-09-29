@@ -307,6 +307,21 @@
 #app .modal .bkprog > div { height:100%; background:linear-gradient(90deg, var(--link), var(--gold2, #d9a441)); transition:width .3s; }
 #app .foot { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }
 
+/* ================= v10 增补 ================= */
+/* 通知正文换行保留（修复长段通知挤成一行的显示问题） */
+#app .nitem .nb { white-space:pre-wrap; word-break:break-word; }
+/* 公文版式预览（Word 在线查看优化：标题居中/层级小标/落款右对齐） */
+#app .gdoc { font-family:"FangSong","STFangsong","FangSong_GB2312","仿宋","Noto Serif SC","Songti SC",serif; font-size:14.5px; line-height:1.95; color:var(--txt); }
+#app .gdoc .gd-t { text-align:center; font-family:"SimHei","Noto Sans SC","Source Han Sans SC","PingFang SC",sans-serif; font-weight:700; font-size:19px; line-height:1.6; margin-bottom:6px; }
+#app .gdoc .gd-n { text-align:center; color:var(--txt3); font-size:13px; margin-bottom:16px; }
+#app .gdoc .gd-to { margin-bottom:4px; }
+#app .gdoc .gd-h1 { font-family:"SimHei","Noto Sans SC","Source Han Sans SC","PingFang SC",sans-serif; font-weight:700; margin:12px 0 3px; }
+#app .gdoc .gd-h2 { font-family:"KaiTi","STKaiti","楷体","Noto Serif SC",serif; font-weight:700; margin:9px 0 3px; }
+#app .gdoc .gd-b { text-indent:2em; margin:2px 0; }
+#app .gdoc .gd-sg { text-align:right; margin-top:24px; line-height:2; }
+/* 目录树锁定节点（含 🔒 前缀的保持可点） */
+#app .tnode.lock .ar { display:none; }
+
 </style>
 </head>
 <body>
@@ -323,6 +338,34 @@ window.__PROBE = (async () => {
     return 'direct';
   } catch(e) { return 'frame'; }
 })();
+/* ===== 引擎追新（v10.1 根治，2026-09-28 事故复盘） =====
+ * 事故：ysepan 每次上传都生成新直链，旧启动器烘焙的 config/引擎直链永远指向部署
+ * 时刻的静态文件 —— v10 只更新了网盘侧，启动器仍读 v9.1 旧文件，全员停在旧版。
+ * 根治：引擎指针（appVer/engineUrl/engineTs）写进 GitHub 仓库 bootpool.json ——
+ * URL 永久稳定、无直链轮换、Actions 每日 08:55 刷新且支持手动触发。
+ * 启动器每次启动拉取比对：指针比烘焙基线新 → 用指针引擎；否则用内嵌/烘焙引擎。
+ * 【部署约定】网盘传完新引擎后，到 GitHub Actions 手动触发一次 refresh-bootpool，
+ *   一分钟内全社团自动追新（每日 08:55 亦会自动同步）。 */
+var BOOTPOOL_LAUNCH_URL = "https://beixianggumao.github.io/Negative/bootpool.json";
+var __ENGINE_TS = 1790610646155;   // 烘焙基线：只接受比它更新的指针（防旧清单把引擎换回旧版）
+var __SVG_URL  = "https://ys-e.ysepan.com/wap/beixianggumao/Hc4IUA7Iei6g2RW/IiClCERwg8dNd8meIydAIKKCOac9J/%E7%A4%BE%E5%9B%A2%E6%96%87%E6%A1%A3%E7%B3%BB%E7%BB%9F.svg";
+function __LATEST_ENGINE(){
+  return new Promise(function(res){
+    var done = false;
+    function fin(v){ if(!done){ done = true; clearTimeout(tm); res(v); } }
+    var tm = setTimeout(function(){ fin(null); }, 3500);
+    if (!BOOTPOOL_LAUNCH_URL) return fin(null);
+    fetch(BOOTPOOL_LAUNCH_URL + (BOOTPOOL_LAUNCH_URL.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if (j && j.engineUrl && /ysepan\.com/i.test(j.engineUrl) && (j.engineTs || 0) > __ENGINE_TS) {
+          console.log('launcher: bootpool 引擎指针更新 ->', j.appVer || '(?)', j.engineUrl);
+          fin(j);
+        } else fin(null);
+      })
+      .catch(function(){ fin(null); });
+  });
+}
 async function __LAUNCH(){
   let mode = 'frame';
   try {
@@ -332,18 +375,16 @@ async function __LAUNCH(){
     ]);
   } catch(e) { mode = 'frame'; }
   if (mode === 'direct') {
+    /* 先查追新：云端有更新则改用 iframe 加载最新引擎（内嵌快照仅作快速回退） */
+    var up = null;
+    try { up = await __LATEST_ENGINE(); } catch(e) {}
+    if (up && up.engineUrl) { __FRAME_AT(up.engineUrl); return; }
     try { bootApp(); } catch(e) { console.error('boot fail', e); }
     return;
   }
-  __FRAME();
+  __FRAME_AT(__SVG_URL);
 }
-/* 引擎模式：先用内嵌地址加载（快速首屏），同时异步读取 config.json 里的
- * engineUrl（应用每次启动会把最新引擎地址写回，见 ui2.js syncEngineSignal），
- * 若云端更新则无感切换 iframe —— 保证旧部署包也能自动用上最新引擎。 */
-var __CFG_URL = "";
-  var __ENGINE_TS = 1790602502199;   // 部署时烘入的引擎时间戳：只接受比它更新的云端信号（防旧config把iframe换回旧引擎）
-function __FRAME(){
-  var SVG_URL = "https://ys-c.ysepan.com/wap/beixianggumao/Hc4IUA7Iei6g2RW/4iClCERwg6c7A2mhfydAIKKeN8c9J/%E7%A4%BE%E5%9B%A2%E6%96%87%E6%A1%A3%E7%B3%BB%E7%BB%9F.svg";
+function __FRAME_AT(SVG_URL){
   var app = document.getElementById('app');
   document.title = '社团文档归档权限系统 · 定格未来共创无限';
   app.setAttribute('data-mode','light');
@@ -364,14 +405,13 @@ function __FRAME(){
   app.innerHTML = h;
   var x = document.getElementById('ld_x');
   if (x) x.onclick = function(){ var b = document.getElementById('ld_badge'); if (b) b.remove(); };
-  if (__CFG_URL) {
-    fetch(__CFG_URL, {cache:'no-store'}).then(r => r.ok ? r.json() : null).then(c => {
-      if (c && c.engineUrl && /ysepan\.com/i.test(c.engineUrl) && c.engineUrl !== SVG_URL && (c.engineTs||0) > __ENGINE_TS) {
-        var f = app.querySelector('iframe');
-        if (f) { f.src = c.engineUrl; console.log('launcher: engine updated ->', c.engineUrl); }
-      }
-    }).catch(function(){});
-  }
+  /* frame 模式异步追新：bootpool 指针比烘焙基线新 → 无感切换 iframe */
+  __LATEST_ENGINE().then(function(up){
+    if (up && up.engineUrl && up.engineUrl !== SVG_URL) {
+      var f = app.querySelector('iframe');
+      if (f) { f.src = up.engineUrl; console.log('launcher: engine updated ->', up.engineUrl); }
+    }
+  });
 }
 ;
 /* ================= core.js · 工具 / YST API / CP-ABE / 数据层 / 权限引擎 ================= */
@@ -391,7 +431,7 @@ const APPROOT = () => document.getElementById('app');          // SVG文档无bo
 const IS_SVG_DOC = (document.contentType === 'image/svg+xml') || (document.documentElement.namespaceURI !== XHTML);
 /* 应用版本（与 config.json 的 appVer 对照：云端更高时顶部提示「打开最新版」，
  * 配合启动器动态引擎地址实现「更新必达」，避免旧入口停留旧版 */
-const APP_VER = 'v9.1-20260928';
+const APP_VER = 'v10.1-20260928';
 // 版本序数：v9.1 → 9001，用于 syncEngineSignal 防旧引擎回写降级（v9.1 事故教训）
 function verRank(v){ const m = /^v(\d+)(?:\.(\d+))?/i.exec(String(v||'')); return m ? (+m[1])*1000 + (+m[2]||0) : 0; }
 if (IS_SVG_DOC) {
@@ -801,9 +841,9 @@ const YST = (() => {
   const _p1='THl4MA==', _p2='NjAyMA==';
   const ADMIN_PWD = (()=>{ try{ return atob(_p1)+atob(_p2); }catch(e){ return ''; } })(); // Lyx06020
   const BOOT_GUEST = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiZWl4aWFuZ2d1bWFvIiwianRpIjoiNjI0OTQwNjc2MTkiLCJzamsiOiJ5c2Q3IiwiZXhwIjoxNzkwODYxMjcxLCJpc3MiOiJNeVNlY3VyZUlzc3VlciIsImF1ZCI6WyJNeVNlY3VyZUF1ZGllbmNlIiwiTXlTZWN1cmVBdWRpZW5jZSJdLCJnbHkiOiIxIn0.T6YybvUcYNPKN2Sbi-cUONQXdNo392IssHpEQrU1pEg";
-  const CFG_BOOT_URL = "https://ys-e.ysepan.com/wap/beixianggumao/Hc4JUA7Iei6i2BW/GjD5D2Sxh7dLdmcGu5hPJOkENn2R/config.json";
+  const CFG_BOOT_URL = "https://ys-e.ysepan.com/wap/beixianggumao/Hc4JUA7Iei6g2RW/GjD5D2Sxh9d7dmCfu5hPJOICQn2R/config.json";
   const BOOT_POOL_URL = "https://beixianggumao.github.io/Negative/bootpool.json";
-  const BUILD_TS = 1790602502199;
+  const BUILD_TS = 1790610646155;
   let tk = localStorage.getItem('yst_tk') || '';
   let renewing = null;
   let extraTks = [];  // 运行时注入的候选令牌（config.sysToken / sysTokens 历史池）
@@ -975,7 +1015,7 @@ const ORG = (() => {
     '摄影社': ['摄影部门','后期部门','运营部门'],
     '信息素养小组': ['比赛部门','活动部门']
   };
-  const GRANTERS = ['社长','副社长-摄影社','副社长-信息素养小组','秘书处-处长'];
+  const GRANTERS = ['社长','副社长-摄影社','副社长-信息素养小组','秘书处-处长'];  // 审批人（副处长不审批，可看权限发放面板）
   const LEVELS = {'社长':5,'副社长':4,'处长':4,'副处长':3,'干事':2,'社员':1};
   // 密级 → 数值等级（归档者只能设置自己权限等级及以下的密级）
   const LEVEL_NUM = {'公开级':1,'部门级':1,'干事级':2,'核心级':3,'社长级':5};
@@ -1008,7 +1048,61 @@ const ORG = (() => {
     return null;
   }
   function isMishuchu(u){ return (u.attrs||[]).some(a=>a.startsWith('秘书处-')); }
-  return {CLUBS, DEPTS, GRANTERS, LEVEL_NUM, LEVEL_ORDER, levelOf, isGrantor, isShezhang, clubOf, deptOf, isMishuchu, canSetLevel, settableLevels};
+  /* 密级详细说明（上传/申请时展示：谁能看、适用场景） */
+  const LEVEL_DESC = {
+    '公开级': '全员可见 — 全体认证社员均可在线查看与下载。适用：招新公告、比赛通知、公开表彰、积分公示等全社信息。',
+    '部门级': '本部门可见 — 归档目录所属部门成员、本社副社长、秘书处与管理岗可读。适用：部门任务单、考勤与工作记录。',
+    '干事级': '干事及以上 — 各部门干事、秘书处全体及管理岗可读。适用：内部工作文书、流程规范、一般性奖惩记录。',
+    '核心级': '核心管理 — 仅社长、秘书处处长/副处长可读。适用：人员任免、奖惩决定、敏感协调文书。',
+    '社长级': '仅社长 — 只有社长一人可读。适用：涉密材料、账号资料、需严格限阅的文件。'
+  };
+  /* ---------- 积分计分分组 ----------
+   * 规则（按章程与社长室制度）：
+   * · 社长、副社长（两社）、秘书处处长/副处长 → 计入「社长室」；
+   * · 秘书处干事 → 计入「平行秘书处」；部门成员 → 计入所属部门；
+   * · 多职务按最高职务计分；最高职务并列且分组不同（如身兼两部门干事）时，
+   *   需选择「主要计分部门」（user.primaryDept），选择后可随时更改。 */
+  function roleLv(a){ return a==='社长' ? 5 : a.startsWith('副社长-') ? 4
+    : a==='秘书处-处长' ? 4 : a==='秘书处-副处长' ? 3
+    : a==='秘书处-干事' ? 2 : /-干事$/.test(a) ? 2 : /-社员$/.test(a) || a==='社员' ? 1 : 0; }
+  function scoreCandidates(attrs){
+    const A = attrs||[];
+    const cands = []; let top = 0;
+    for(const a of A){
+      const lv = roleLv(a); if(lv <= 0) continue;
+      let grp = null;
+      if(a === '社长' || a.startsWith('副社长-') || a === '秘书处-处长' || a === '秘书处-副处长') grp = '社长室';
+      else if(a === '秘书处-干事') grp = '平行秘书处';
+      else { const m = a.match(/^(摄影社|信息素养小组)-(.+)-(干事|社员)$/); if(m) grp = m[1]+'·'+m[2]; }
+      if(!grp) continue;
+      if(lv > top){ top = lv; cands.length = 0; }
+      if(lv === top && !cands.includes(grp)) cands.push(grp);
+    }
+    return cands.length ? cands : ['未分配'];
+  }
+  function scoreGroupOf(u){
+    const cands = scoreCandidates(u.attrs);
+    if(cands.length <= 1) return cands[0];
+    return cands.includes(u.primaryDept) ? u.primaryDept : cands[0];
+  }
+  function hasDeptChoice(u){ return scoreCandidates(u.attrs).length > 1; }
+  /* ---------- 审批权限范围（防跨社团审批） ----------
+   * 社长：全部目录可批；摄影社副社长：仅摄影社目录；信息素养小组副社长：仅信息素养小组目录；
+   * 秘书处处长：仅秘书处目录（联合机构职能，不可跨入两社部门）。 */
+  function approverScopeOf(u){
+    const A = u.attrs||[];
+    if(A.includes('社长')) return {all:true, clubs:[], sec:false, label:'全社（所有目录）'};
+    const clubs = [];
+    if(A.includes('副社长-摄影社')) clubs.push('摄影社');
+    if(A.includes('副社长-信息素养小组')) clubs.push('信息素养小组');
+    const sec = A.includes('秘书处-处长');
+    const parts = [];
+    if(clubs.length) parts.push(clubs.join('、') + '目录');
+    if(sec) parts.push('秘书处目录');
+    return {all:false, clubs, sec, label: parts.join(' + ') || '无审批范围'};
+  }
+  return {CLUBS, DEPTS, GRANTERS, LEVEL_NUM, LEVEL_ORDER, levelOf, isGrantor, isShezhang, clubOf, deptOf, isMishuchu, canSetLevel, settableLevels,
+    LEVEL_DESC, roleLv, scoreCandidates, scoreGroupOf, hasDeptChoice, approverScopeOf};
 })();
 
 /* ---------- 积分档位（源自《社员积分奖惩章程（试行）》信摄秘〔2026〕办字第004号 附件） ----------
@@ -1929,19 +2023,51 @@ const Store = (() => {
     });
   }
 
-  /* ---------- 权限申请与临时密钥 ---------- */
-  async function submitAccessRequest(u, folder, reason, hours){
+  /* ---------- 权限申请与临时密钥 ----------
+   * v10：支持一次申请多个目录（部门多选）；审批范围限定——社长全批，
+   * 两社副社长仅限本社团目录，秘书处处长仅限秘书处目录（防跨社团审批）。 */
+  // 兼容新旧结构：取申请的目标目录列表 [{folderId, folderName}]
+  function reqFolders(r){
+    if(Array.isArray(r.folders) && r.folders.length) return r.folders;
+    return r.folderId ? [{folderId:r.folderId, folderName:r.folderName}] : [];
+  }
+  // 审批范围判定：该审批人是否有权处理此申请（含全部目标目录才算有权）
+  function canApproveReq(u, r){
+    if(!ORG.isGrantor(u)) return false;
+    const sc = ORG.approverScopeOf(u);
+    if(sc.all) return true;
+    const fs = reqFolders(r);
+    if(!fs.length) return false;
+    return fs.every(f => {
+      const fo = (cfg.folders||[]).find(x=>x.id===f.folderId);
+      if(!fo) return false;
+      if(fo.kind==='dept' || fo.kind==='club') return sc.clubs.includes(fo.scope && fo.scope.club);
+      if(fo.kind==='sec') return sc.sec;
+      return false;
+    });
+  }
+  async function submitAccessRequest(u, folderObjs, reason, hours){
+    folderObjs = (Array.isArray(folderObjs) ? folderObjs : [folderObjs])
+      .map(f => ({folderId:f.folderId||f.id, folderName:f.folderName||f.name}));
+    if(!folderObjs.length) throw new Error('请至少选择一个申请目录');
     const rid = U.uid();
+    const names = folderObjs.map(f=>f.folderName).join('、');
     await update('requests', R => {
       R.access = R.access || [];
       R.access.push({id:rid, type:'access', applicantId:u.id, applicant:u.displayName,
-        username:u.username, folderId:folder.id, folderName:folder.name, reason,
-        hours:hours||24, status:'待审批', ts:Date.now(), decidedBy:null, decidedTs:null});
+        username:u.username, folders:folderObjs, folderId:folderObjs[0].folderId, folderName:folderObjs[0].folderName,
+        reason, hours:hours||24, status:'待审批', ts:Date.now(), decidedBy:null, decidedTs:null});
       if(R.access.length>200) R.access=R.access.slice(-150);
     });
-    await log(u, '提交访问申请', folder.name, '理由: '+reason, '待审批');
-    for(const g of ORG.GRANTERS) await notify({kind:'role', v:g}, '新的临时权限申请',
-      `${u.displayName}（${u.username}）申请临时访问「${folder.name}」，理由：${reason}`, '权限系统', {type:'access', id:rid});
+    await log(u, '提交访问申请', names + (folderObjs.length>1 ? `（共${folderObjs.length}个目录）` : ''), '理由: '+reason, '待审批');
+    // 仅通知有权限审批该范围的管理岗（副社长不收跨社申请、处长只收秘书处申请）
+    for(const g of ORG.GRANTERS){
+      const gu = users.items.find(x => (x.attrs||[]).includes(g) && x.active && !x.deleted);
+      if(!gu) continue;
+      if(!canApproveReq({attrs:gu.attrs}, {folders:folderObjs})) continue;
+      await notify({kind:'user', v:gu.id}, '新的临时权限申请',
+        `${u.displayName}（${u.username}）申请临时访问「${names}」，理由：${reason}`, '权限系统', {type:'access', id:rid});
+    }
     return rid;
   }
   async function decideAccess(granter, rid, ok){
@@ -1950,23 +2076,66 @@ const Store = (() => {
       req = (R.access||[]).find(x=>x.id===rid);
       if(req && req.status==='待审批'){ req.status = ok?'已通过':'已驳回'; req.decidedBy=granter.displayName; req.decidedTs=Date.now(); }
     });
-    if(req && ok){
+    if(!req) throw new Error('申请不存在或已被处理');
+    if(ok){
+      const until = Date.now() + (req.hours||24)*3600*1000;
       await update('requests', R => {
+        const r2 = (R.access||[]).find(x=>x.id===rid);
         R.grants = R.grants || [];
-        R.grants.push({id:U.uid(), user:req.applicantId, username:req.username, folderId:req.folderId,
-          folderName:req.folderName, until:Date.now() + (req.hours||24)*3600*1000, by:granter.displayName, ts:Date.now()});
+        for(const f of reqFolders(r2)){
+          R.grants.push({id:U.uid(), rid, user:r2.applicantId, username:r2.username,
+            folderId:f.folderId, folderName:f.folderName, hours:r2.hours||24,
+            until, by:granter.displayName, ts:Date.now()});
+        }
       });
     }
-    await log(granter, ok?'通过访问申请':'驳回访问申请', req?req.folderName:rid, '申请人: '+(req?req.applicant:''), req?req.status:'');
-    if(req) await notify({kind:'user', v:req.applicantId}, '访问申请' + (ok?'已通过':'已驳回'),
-      ok ? `你申请的「${req.folderName}」临时访问权限已由 ${granter.displayName} 批准，有效期 ${req.hours} 小时。`
-         : `你申请的「${req.folderName}」临时访问权限被 ${granter.displayName} 驳回。`,
+    await log(granter, ok?'通过访问申请':'驳回访问申请', reqFolders(req).map(f=>f.folderName).join('、'),
+      '申请人: '+req.applicant, ok?'已通过':'已驳回');
+    const untilTxt = ok ? `，有效期 ${req.hours} 小时（至 ${U.fmtTs(Date.now() + (req.hours||24)*3600*1000)}）` : '';
+    await notify({kind:'user', v:req.applicantId}, '访问申请' + (ok?'已通过':'已驳回'),
+      ok ? `你申请的「${reqFolders(req).map(f=>f.folderName).join('、')}」临时访问权限已由 ${granter.displayName} 批准${untilTxt}。`
+         : `你申请的「${reqFolders(req).map(f=>f.folderName).join('、')}」临时访问权限被 ${granter.displayName} 驳回。`,
       '权限系统', {type:'access', id:rid});
   }
   function activeGrants(u){ return (requests.grants||[]).filter(g => g.user===u.id && g.until>Date.now()); }
+  // 授权管理范围：社长全部；副社长限本社目录；处长/副处长限秘书处目录
+  function canManageGrant(u, g){
+    if(ORG.isShezhang(u)) return true;
+    const A = u.attrs||[];
+    const sc = ORG.approverScopeOf(u);
+    const fo = (cfg.folders||[]).find(x=>x.id===g.folderId);
+    if(!fo) return false;
+    if(fo.kind==='dept' || fo.kind==='club') return sc.clubs.includes(fo.scope && fo.scope.club);
+    if(fo.kind==='sec') return sc.sec || A.includes('秘书处-副处长');
+    return false;
+  }
+  async function revokeGrant(operator, gid){
+    let g = null;
+    await update('requests', R => {
+      g = (R.grants||[]).find(x=>x.id===gid);
+      if(g && g.until > Date.now()){ g.until = Date.now(); g.revoked = {by:operator.displayName, ts:Date.now()}; }
+    });
+    if(!g) throw new Error('授权记录不存在');
+    const t = users.items.find(x=>x.id===g.user);
+    await log(operator, '收回临时授权', g.folderName || g.folderId, '被授权人: '+(t?t.displayName:'-'), '已收回');
+    await notify({kind:'user', v:g.user}, '临时授权已收回',
+      `你在「${g.folderName||'相应目录'}」的临时访问权限已被 ${operator.displayName} 提前收回。`, '权限系统');
+    return g;
+  }
+  async function adjustGrant(operator, gid, until){
+    let g = null;
+    await update('requests', R => {
+      g = (R.grants||[]).find(x=>x.id===gid);
+      if(g){ g.until = until; g.adjusted = {by:operator.displayName, ts:Date.now()}; }
+    });
+    if(!g) throw new Error('授权记录不存在');
+    await log(operator, '调整授权时长', g.folderName || g.folderId, `到期调整至 ${U.fmtTs(until)}`, '成功');
+    await notify({kind:'user', v:g.user}, '临时授权已调整',
+      `你在「${g.folderName||'相应目录'}」的临时访问权限已由 ${operator.displayName} 调整至 ${U.fmtTs(until)} 到期。`, '权限系统');
+    return g;
+  }
   function pendingAccessFor(u){
-    if(!ORG.isGrantor(u)) return [];
-    return (requests.access||[]).filter(r=>r.status==='待审批');
+    return (requests.access||[]).filter(r=>r.status==='待审批' && canApproveReq(u, r));
   }
 
   /* ---------- 运营部视频申请（“视”字批号 + 双格式文书归档 + 三级审批链） ----------
@@ -2078,25 +2247,41 @@ const Store = (() => {
     return (requests.video||[]).filter(v => videoCanApprove(v, u));
   }
 
-  /* ---------- 积分 ---------- */
+  /* ---------- 积分 ----------
+   * addPoints：单条调整（保留兼容）；addPointsBatch：批量调整（一次台账写入 + 逐人通知）。 */
   async function addPoints(operator, targetUser, delta, reason, record){
-    const rid = U.uid();
+    await addPointsBatch(operator, [{user:targetUser, delta, reason, item:[delta,'积分调整','']}], {record});
+  }
+  async function addPointsBatch(operator, rows, opts){
+    opts = opts || {};
+    if(!rows || !rows.length) throw new Error('批量调整为空');
     await update('points', P => {
       P.ledger = P.ledger || [];
-      P.ledger.push({id:rid, ts:Date.now(), user:targetUser.id, username:targetUser.username,
-        name:targetUser.displayName, delta, reason, by:operator.displayName});
-      if(P.ledger.length>800) P.ledger=P.ledger.slice(-600);
+      for(const r of rows){
+        P.ledger.push({id:U.uid(), ts:Date.now(), user:r.user.id, username:r.user.username,
+          name:r.user.displayName, delta:r.delta,
+          reason: r.item && r.item[1] ? `【${r.item[1]}】${r.reason}` : r.reason,
+          by:operator.displayName, batchNo:r.batchNo||''});
+      }
+      if(P.ledger.length>1500) P.ledger=P.ledger.slice(-1200);
     });
-    await notify({kind:'user', v:targetUser.id}, '积分变动通知',
-      `${delta>0?'+':''}${delta} 分（${reason}）—— 操作人：${operator.displayName}`, '积分系统');
-    if(record !== false) await log(operator, '积分调整', targetUser.displayName, `${delta>0?'+':''}${delta}分 ${reason}`, '已记录');
+    for(const r of rows){
+      await notify({kind:'user', v:r.user.id}, '积分变动通知',
+        `${r.delta>0?'+':''}${r.delta} 分（${r.item&&r.item[1] ? r.item[1]+'；事由：'+r.reason : r.reason}）—— 操作人：${operator.displayName}`, '积分系统');
+    }
+    if(opts.record !== false) await log(operator, '批量积分调整', `${rows.length} 人`,
+      rows.map(r=>`${r.user.displayName}${r.delta>0?'+':''}${r.delta}分`).join('、'), '已记录');
   }
   function balanceOf(userId){ return (points.ledger||[]).reduce((s,l)=>s + (l.user===userId ? l.delta : 0), 0); }
+  // 加分/扣分小计（积分展示：总积分之后的加分、扣分两项）
+  function sumsOf(userId){ let pos=0, neg=0;
+    for(const l of (points.ledger||[])){ if(l.user!==userId) continue; if(l.delta>=0) pos+=l.delta; else neg+=l.delta; }
+    return {pos, neg}; }
   function board(){
     const m = {};
     for(const l of (points.ledger||[])){ m[l.user] = (m[l.user]||0) + l.delta; }
-    return users.items.filter(u=>!u.deleted && u.active!==false || u.id).map(u => ({user:u, score:m[u.id]||0}))
-      .filter(x=>!x.user.deleted)
+    return users.items.filter(u=>!u.deleted)
+      .map(u => { const s = sumsOf(u.id); return {user:u, score:m[u.id]||0, pos:s.pos, neg:s.neg}; })
       .sort((a,b)=>b.score-a.score);
   }
 
@@ -2419,9 +2604,10 @@ const Store = (() => {
     get logs(){return logs;}, get notices(){return notices;}, get requests(){return requests;},
     get points(){return points;}, get webTemp(){return WT;},
     init, loadAll, loadAllFallback, isDegraded, upd, log, notify, myNotices, unreadCount, markRead,
-    submitAccessRequest, decideAccess, activeGrants, pendingAccessFor,
+    submitAccessRequest, decideAccess, activeGrants, pendingAccessFor, canApproveReq, reqFolders,
+    canManageGrant, revokeGrant, adjustGrant,
     submitVideo, videoCanApprove, decideVideo, videoPendingFor, VCHAIN,
-    addPoints, balanceOf, board,
+    addPoints, addPointsBatch, balanceOf, sumsOf, board,
     createAccount, deleteAccount, updateProfile, changePwd, setAttrs,
     resetPassword, setAccountStatus, adminUpdateUser, sendNotice,
     vaultEnabled, vaultInit, vaultAdd, vaultOpen,
@@ -2497,6 +2683,7 @@ const BANNERS = {
   points:  ['slim', '积分共享 · 难度平衡 · 学期评定'],
   notices: ['slim', '通知与审批中心'],
   video:   ['slim', '运营发布 · 三级审批链'],
+  grants:  ['slim', '权限发放 · 临时密钥与授权管理'],
   admin:   ['slim', '社长管理面板'],
   backup:  ['slim', '一键备份与恢复'],
   profile: ['slim', '个人面板']
@@ -2526,6 +2713,14 @@ const Router = (() => {
 })();
 function nav2(r){ location.hash = '#/'+r; }
 function canBackup(u){ return ORG.isShezhang(u) || (u.attrs||[]).includes('秘书处-处长'); }
+// 权限发放面板可见者：社长、两社副社长、秘书处处长/副处长
+function canGrantPanel(u){ return ORG.isGrantor(u) || (u.attrs||[]).includes('秘书处-副处长'); }
+async function doLogout(){
+  if(!await Modal.confirm('退出登录', '确定退出当前账号吗？未同步的数据会在后台自动冲刷回网盘，不影响数据安全。', '退出')) return;
+  try { await Store.flushDirty(); } catch(e){}
+  Session.logout();
+  location.reload();
+}
 
 /* ---------- Fluid 外壳：顶栏 + 横幅 + 看板 ---------- */
 function renderShell(){
@@ -2533,6 +2728,7 @@ function renderShell(){
   const unread = Store.unreadCount(u);
   const isS = ORG.isShezhang(u);
   const bk = canBackup(u);
+  const gp = canGrantPanel(u);
   $('#app').innerHTML = `
   <div class="pbar"></div>
   <nav class="topnav" id="topnav">
@@ -2544,12 +2740,14 @@ function renderShell(){
         <a data-r="docs">▣ 文档中心</a>
         <a data-r="points">★ 积分</a>
         <a data-r="notices">✉ 通知${unread?`<span class="badge">${unread}</span>`:''}</a>
-        <a data-r="video">▷ 视频申请</a>
-        ${isS?`<a data-r="admin">⚙ 管理面板</a>`:''}
-        ${bk?`<a data-r="backup">⛁ 一键备份</a>`:''}
-        <a data-r="profile">☺ 个人面板</a>
+        <a data-r="video">▷ 视频</a>
+        ${gp?`<a data-r="grants">⛨ 权限</a>`:''}
+        ${isS?`<a data-r="admin">⚙ 管理</a>`:''}
+        ${bk?`<a data-r="backup">⛁ 备份</a>`:''}
+        <a data-r="profile">☺ 个人</a>
         <a id="searchNavBtn" title="搜索文档">⌕</a>
         <a id="modeNavBtn" title="亮 / 暗模式">◐</a>
+        <a id="logoutBtn" title="退出登录">⏻</a>
         <span class="mchip" data-r="profile" onclick="nav2('profile')">
           <span class="ava">${u.avatar?`<img src="${u.avatar}">`:U.esc((u.displayName||'?')[0])}</span>
           <span class="mname">${U.esc(u.displayName)}</span></span>
@@ -2568,6 +2766,7 @@ function renderShell(){
   </footer>
   <button id="scroll-top-button" aria-label="TOP">↑</button>`;
   $$('.menu a[data-r]').forEach(a=>{ if(a.id!=='searchNavBtn') a.onclick = ()=>nav2(a.dataset.r); });
+  const lm = $('#logoutBtn'); if(lm) lm.onclick = doLogout;
   const hm = $('#hambBtn'), mn = $('#navMenu');
   if(hm) hm.onclick = ()=>{ mn.classList.toggle('open'); hm.classList.toggle('open'); };
   $$('.menu a[data-r]').forEach(a=>a.addEventListener('click', ()=>{ mn.classList.remove('open'); hm.classList.remove('open'); }));
@@ -2953,18 +3152,19 @@ Router.reg('docs', async (main, folderId) => {
   const u = Session.user();
   const folders = Store.cfg.folders||[];
   const grants = Store.activeGrants(u);
-  const visible = folders.filter(f => PERM.canViewF(f, u, folders, grants));
   const curId = folderId || 'F0';
   const isAll = curId === 'all';
   const cur = isAll ? null : folders.find(f=>f.id===curId);
-  // 目录树（顶部附「全部文档」元数据总览虚拟节点）
-  const children = pid => visible.filter(f=>f.parent===pid);
+  // 目录树：显示全部目录（含无权限目录，加锁标记——修复「权限申请入口找不到」问题），
+  // 点击无权限目录可进入并提交临时访问申请
+  const children = pid => folders.filter(f=>f.parent===pid);
   let tree = '';
   function node(f, depth){
     const kids = children(f.id);
     const hasKids = kids.length>0;
-    tree += `<div class="tnode ${f.id===curId?'on':''}" data-f="${f.id}" style="padding-left:${8+depth*14}px">
-      <span class="ar">${hasKids?'▸':''}</span><span>${f.name}</span></div>`;
+    const ok = PERM.canViewF(f, u, folders, grants);
+    tree += `<div class="tnode ${f.id===curId?'on':''} ${ok?'':'lock'}" data-f="${f.id}" style="padding-left:${8+depth*14}px">
+      <span class="ar">${hasKids?'▸':''}</span><span>${ok?'':'🔒 '}${U.esc(f.name)}</span></div>`;
     kids.forEach(k=>node(k, depth+1));
   }
   children(null).forEach(f=>node(f,0));
@@ -2973,9 +3173,9 @@ Router.reg('docs', async (main, folderId) => {
   const canUp = cur && PERM.canUpF(cur, u);
   const canSeeEntries = cur && (PERM.canViewF(cur, u, folders, grants));
   main.innerHTML = `
-  <div class="crumbs">文档中心 ${isAll?'/ <b>全部文档</b>':(cur?`/ <b>${U.esc(cur.name)}</b>`:'')}</div>
+  <div class="crumbs">文档中心 ${isAll?'/ <b>全部文档</b>':(cur?`/ <b>${U.esc(cur.name)}</b>${canSeeEntries?'':' <span class="tag red">🔒 无权限</span>'}`:'')}</div>
   <div class="docs">
-    <div class="dtree"><div class="ti">目录树（仅显示有权目录）</div>${tree||'<div class="empty">无可见目录</div>'}</div>
+    <div class="dtree"><div class="ti">目录树（🔒 表示暂无权限，点击可申请）</div>${tree||'<div class="empty">无目录</div>'}</div>
     <div class="dlist">
       ${searchPanelHTML('sp')}
       ${isAll ? `
@@ -2997,7 +3197,8 @@ Router.reg('docs', async (main, folderId) => {
       </div>
       <div class="card" style="padding:8px 14px" id="sp_target">
       ${canSeeEntries ? (Store.entriesIn(cur.id).length ? folderTable(Store.entriesIn(cur.id), u, cur) : '<div class="empty">本目录暂无归档文档</div>')
-       : `<div class="empty">无权限访问本目录内容<br><button class="btn pri" id="reqBtn" style="margin-top:12px">申请临时访问权限</button></div>`}
+       : `<div class="empty">无权限访问本目录内容<br><button class="btn pri" id="reqBtn" style="margin-top:12px">申请临时访问权限</button>
+          <div style="margin-top:10px"><a id="reqMulti" style="color:var(--link);cursor:pointer;font-size:12.5px">或一次申请多个目录 →</a></div></div>`}
       </div>` : '<div class="card"><div class="empty">请选择左侧目录，或在上方搜索全部文档</div></div>')}
     </div>
   </div>`;
@@ -3016,6 +3217,7 @@ Router.reg('docs', async (main, folderId) => {
   bindSearchPanel('sp', u, renderRes);
   if($('#upBtn')) $('#upBtn').onclick = ()=>uploadDlg(cur);
   if($('#reqBtn')) $('#reqBtn').onclick = ()=>requestDlg(cur);
+  if($('#reqMulti')) $('#reqMulti').onclick = ()=>accessApplyDlg(cur && cur.id);
 });
 function folderTable(entries, u, cur){
   return `<div class="tbl-wrap"><table class="tbl"><thead><tr>
@@ -3097,6 +3299,9 @@ function uploadDlg(folder){
         ${lvOpts.map(l=>`<option>${l}</option>`).join('')}
       </select></div>
     </div>
+    <div class="card" style="margin:6px 0;padding:8px 12px;background:rgba(127,127,127,.06);border:none">
+      <div class="kv"><span class="k">密级说明</span><span class="muted" id="up_l_desc" style="line-height:1.8"></span></div>
+    </div>
     <div class="muted" style="font-size:12px;margin:-4px 0 6px">* 归档文件只能设置自己权限等级及以下的密级（当前等级：${ORG.levelOf(u.attrs)>=5?'社长':ORG.levelOf(u.attrs)>=4?'副社长/处长':ORG.levelOf(u.attrs)>=3?'副处长':ORG.levelOf(u.attrs)>=2?'干事':'社员'}）</div>
     <div class="grid2">
       <div><label class="fl">文件批号（选择文种自动编号）</label>
@@ -3115,6 +3320,9 @@ function uploadDlg(folder){
     const k = m.querySelector('#up_b').value;
     m.querySelector('#up_b').title = k ? `提交时自动编号为 ${Store.peekBatchNo(k)}` : '';
   };
+  const lsel = m.querySelector('#up_l'), ldesc = m.querySelector('#up_l_desc');
+  const showLv = () => { ldesc.textContent = '· ' + (ORG.LEVEL_DESC[lsel.value] || ''); };
+  lsel.onchange = showLv; showLv();
   m.querySelector('#up_c').onclick = ()=>m.remove();
   m.querySelector('#up_o').onclick = async () => {
     const f = m.querySelector('#up_f').files[0];
@@ -3138,21 +3346,49 @@ function uploadDlg(folder){
   };
 }
 
-/* ---------- 临时权限申请弹框 ---------- */
-function requestDlg(folder){
-  const m = Modal.open(`<h3>申请临时访问权限 → ${U.esc(folder.name)}</h3>
-    <div class="muted" style="line-height:1.8">你当前无权限访问该目录。提交申请后由社长、两位副社长或秘书处处长审批，
-    通过后在有效期内可临时访问。全部申请与审批行为均记录日志。</div>
-    <label class="fl">申请理由</label><textarea id="rq_r" placeholder="请说明访问该目录的原因…"></textarea>
-    <label class="fl">有效时长</label><select id="rq_h"><option value="2">2 小时</option><option value="24" selected>24 小时</option><option value="72">72 小时</option></select>
+/* ---------- 临时权限申请弹框（v10：支持多目录多选 / 按社团全选 / 密级场景说明） ---------- */
+function requestDlg(folder){ accessApplyDlg(folder && folder.id); }
+function accessApplyDlg(prefId){
+  const u = Session.user();
+  const folders = Store.cfg.folders||[];
+  // 候选目录：非根目录且当前无基础权限（临时授权期内视为已可见，无需申请）
+  const cands = folders.filter(f => f.kind!=='root' && !PERM.canViewF(f, u, folders, []));
+  const scope = ORG.approverScopeOf(u);
+  const m = Modal.open(`<h3>申请临时访问权限</h3>
+    <div class="muted" style="line-height:1.8">选择需要临时访问的一个或多个目录（可跨部门多选），审批通过后在有效期内可访问。
+      审批规则：${U.esc(scope.label)}的申请由相应管理岗审批（社长可批全部）。</div>
+    ${cands.length ? `
+    <div class="row wrap" style="gap:6px;margin:8px 0">
+      <span class="chip" id="rq_all">全选</span>
+      ${ORG.CLUBS.map(c=>`<span class="chip" data-club="${c}">全选${c}</span>`).join('')}
+      <span class="chip" id="rq_none">清空</span>
+    </div>
+    <div id="rq_list" style="max-height:30vh;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px">
+      ${cands.map(f=>`<label style="display:flex;gap:8px;align-items:center;padding:4px 0;font-size:13px">
+        <input type="checkbox" class="rq_f" value="${f.id}" ${f.id===prefId?'checked':''} style="width:auto">
+        <span>${U.esc(f.name)} <span class="muted">（${U.esc(folderDesc(f)||'目录')}）</span></span></label>`).join('')}
+    </div>` : '<div class="empty">当前没有可申请的目录（全部目录均已有权限）</div>'}
+    <label class="fl">申请理由</label><textarea id="rq_r" placeholder="请说明访问原因与用途…"></textarea>
+    <label class="fl">有效时长</label><select id="rq_h"><option value="2">2 小时</option><option value="24" selected>24 小时</option><option value="72">72 小时</option><option value="168">7 天</option></select>
     <div class="foot"><button class="btn" id="rq_c">取消</button><button class="btn pri" id="rq_o">提交申请</button></div>`, {sticky:true});
   m.querySelector('#rq_c').onclick = ()=>m.remove();
+  const boxes = () => Array.from(m.querySelectorAll('.rq_f'));
+  m.querySelectorAll('.chip[data-club]').forEach(ch=>ch.onclick = ()=>{
+    const c = ch.dataset.club;
+    boxes().forEach(b=>{ const f = folders.find(x=>x.id===b.value);
+      if(f && ((f.scope && f.scope.club===c) || (f.kind==='club' && f.scope && f.scope.club===c))) b.checked = true; });
+  });
+  if(m.querySelector('#rq_all')) m.querySelector('#rq_all').onclick = ()=>boxes().forEach(b=>b.checked=true);
+  if(m.querySelector('#rq_none')) m.querySelector('#rq_none').onclick = ()=>boxes().forEach(b=>b.checked=false);
   m.querySelector('#rq_o').onclick = async () => {
+    const ids = boxes().filter(b=>b.checked).map(b=>b.value);
+    if(!ids.length){ U.toast('请至少选择一个目录',1); return; }
     const r = m.querySelector('#rq_r').value.trim();
     if(!r){ U.toast('请填写申请理由',1); return; }
+    const objs = ids.map(id=>{ const f = folders.find(x=>x.id===id); return {folderId:f.id, folderName:f.name}; });
     try {
-      await Store.submitAccessRequest(Session.user(), folder, r, +m.querySelector('#rq_h').value);
-      U.toast('申请已提交，请等待审批'); m.remove();
+      await Store.submitAccessRequest(u, objs, r, +m.querySelector('#rq_h').value);
+      U.toast(`申请已提交（${objs.length} 个目录），请等待审批`); m.remove();
     } catch(e){ U.toast('提交失败：'+(e.message||e),1); }
   };
 }
@@ -3203,6 +3439,43 @@ async function dlEntry(id){
   }
 }
 
+/* ---------- Word 提取正文 → 公文版式渲染（双格式显示优化：Word 预览接近打印版） ----------
+ * 识别公文结构：标题 / 批号 / 主送 / 一级小标（一、）/ 二级小标（（一））/ 正文 / 落款署名+日期。
+ * 普通非公文文档自动回退纯文本展示。 */
+function govDocHTML(text){
+  const nn = String(text||'').replace(/\r/g,'').split('\n').map(s=>s.trim());
+  let i = 0;
+  while(i < nn.length && !nn[i]) i++;
+  const title = nn[i] || ''; i++;
+  let no = '';
+  if(nn[i] && /〔\d{4}〕.+字第\d+号/.test(nn[i])){ no = nn[i]; i++; }
+  let to = '';
+  if(nn[i] && nn[i].length <= 44 && /[：:]$/.test(nn[i])){ to = nn[i]; i++; }
+  // 落款：尾部非空行中匹配日期的行 + 其上方的署名行（不超过 30 字且非小标）
+  const sign = [];
+  let end = nn.length - 1;
+  while(end >= 0 && !nn[end]) end--;
+  if(end >= 0 && /^\d{4}年\d{1,2}月\d{1,2}日$/.test(nn[end])){
+    sign.unshift(nn[end]); end--;
+    while(end >= 0 && !nn[end]) end--;
+    if(end >= 0 && end >= i && nn[end].length <= 30 && !/^[一二三四五六七八九十]、/.test(nn[end])){ sign.unshift(nn[end]); end--; }
+  }
+  const body = [];
+  for(let k = i; k <= end; k++){ if(nn[k]) body.push(nn[k]); }
+  const P = t => {
+    if(/^[一二三四五六七八九十]+、/.test(t) && t.length <= 18) return `<p class="gd-h1">${U.esc(t)}</p>`;
+    if(/^（[一二三四五六七八九十]+）/.test(t) && t.length <= 24) return `<p class="gd-h2">${U.esc(t)}</p>`;
+    return `<p class="gd-b">${U.esc(t)}</p>`;
+  };
+  return `<div class="gdoc">
+    ${title?`<div class="gd-t">${U.esc(title)}</div>`:''}
+    ${no?`<div class="gd-n">${U.esc(no)}</div>`:''}
+    ${to?`<div class="gd-to">${U.esc(to)}</div>`:''}
+    ${body.map(P).join('')}
+    ${sign.length?`<div class="gd-sg">${sign.map(s=>U.esc(s)).join('<br>')}</div>`:''}
+  </div>`;
+}
+
 /* ---------- 在线查看（双格式条目支持 Word / PDF 版切换） ---------- */
 async function previewDlg(id){
   const e = Store.entryById(id); if(!e) return;
@@ -3241,7 +3514,12 @@ async function previewDlg(id){
         let text = '';
         try { text = await DOCX.extractText(buf); }
         catch(err){ b2.innerHTML = `<div class="empty">正文提取失败：${U.esc(err.message||err)}<br>请导出原文件查看</div>`; return; }
-        b2.innerHTML = `<div class="docview" style="max-height:56vh;overflow-y:auto">${U.esc(text||'（未提取到文本内容）')}</div>`;
+        // 公文版式渲染：识别标题/批号/层级小标/落款，预览效果接近打印版；非公文自动回退纯文本
+        const isGov = /〔\d{4}〕|^[一二三四五六七八九十]+、/m.test(text||'');
+        b2.innerHTML = isGov
+          ? `<div class="docview gov" style="max-height:56vh;overflow-y:auto;white-space:normal">${govDocHTML(text)}
+             <div class="muted" style="margin-top:14px;font-size:11.5px;border-top:1px dashed var(--line);padding-top:8px">已按公文版式渲染（标题居中 / 层级小标 / 落款右对齐）；导出 Word 可获得原版可编辑文件</div></div>`
+          : `<div class="docview" style="max-height:56vh;overflow-y:auto">${U.esc(text||'（未提取到文本内容）')}</div>`;
       } else {
         b2.innerHTML = `<div class="empty">该格式暂不支持在线预览，请导出原文件查看</div>`;
       }
@@ -3465,42 +3743,48 @@ Router.reg('backup', async main => {
   })();
 });
 
-/* ---------- 积分模块（全员可查） ---------- */
+/* ---------- 积分模块（全员可查）· v10：总积分 + 加分小计 + 扣分小计（顺序在总分之后） ---------- */
 Router.reg('points', async main => {
   const u = Session.user();
   const board = Store.board();
   const myRank = board.findIndex(b=>b.user.id===u.id)+1;
   const myScore = Store.balanceOf(u.id);
+  const mySums = Store.sumsOf(u.id);
   const mine = (Store.points.ledger||[]).filter(l=>l.user===u.id).sort((a,b)=>b.ts-a.ts);
-  // 部门榜
+  // 部门榜（按计分分组：社长室 / 平行秘书处 / 部门；多职务按最高职务+主要计分部门）
   const deptMap = {};
   for(const b of board){
-    const d = ORG.deptOf(b.user);
-    const key = d ? d.club+'-'+d.dept : (ORG.isMishuchu(b.user)?'平行秘书处':(ORG.isShezhang(b.user)?'社长室':'未分配'));
+    const key = ORG.scoreGroupOf(b.user);
     deptMap[key] = (deptMap[key]||0)+b.score;
   }
   const deptBoard = Object.entries(deptMap).sort((a,b)=>b[1]-a[1]);
+  const isS = ORG.isShezhang(u);
   main.innerHTML = `
   <div class="crumbs">积分模块</div>
   <div class="statgrid">
-    <div class="s"><div class="muted">我的积分</div><div class="v">${myScore}</div><div class="muted">总榜第 ${myRank||'-'} 名</div></div>
+    <div class="s"><div class="muted">我的总积分</div><div class="v">${myScore}</div><div class="muted">总榜第 ${myRank||'-'} 名</div></div>
+    <div class="s"><div class="muted">加分合计</div><div class="v pos">+${mySums.pos}</div><div class="muted">获得加分总和</div></div>
+    <div class="s"><div class="muted">扣分合计</div><div class="v neg">${mySums.neg}</div><div class="muted">扣除扣分总和</div></div>
     <div class="s"><div class="muted">全社人均</div><div class="v">${board.length?Math.round(board.reduce((s,b)=>s+b.score,0)/board.length):0}</div><div class="muted">共 ${board.length} 人</div></div>
     <div class="s"><div class="muted">积分记录</div><div class="v">${mine.length}</div><div class="muted">条明细</div></div>
   </div>
-  <div class="grid2" style="margin-top:16px">
+  ${isS?`<div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" id="pt_csv">⬇ 导出积分台账（CSV · 社长）</button></div>`:''}
+  <div class="grid2" style="margin-top:12px">
     <div class="card">
       <h3>全社积分总榜</h3>
-      <table class="tbl"><thead><tr><th>名次</th><th>社员</th><th>部门</th><th>积分</th></tr></thead><tbody>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>名次</th><th>社员</th><th>计分部门</th><th>总积分</th><th>加分</th><th>扣分</th></tr></thead><tbody>
       ${board.map((b,i)=>`<tr>
         <td class="${['rk1','rk2','rk3'][i]||''}">${i+1}</td>
         <td>${U.esc(b.user.displayName)} <span class="muted">${U.esc(b.user.gradeClass||'')}</span></td>
-        <td class="muted">${U.esc(deptText(b.user))}</td>
-        <td><b class="${b.score>=0?'pos':'neg'}">${b.score}</b></td></tr>`).join('')}
-      </tbody></table>
+        <td class="muted">${U.esc(ORG.scoreGroupOf(b.user))}</td>
+        <td><b class="${b.score>=0?'pos':'neg'}">${b.score}</b></td>
+        <td class="pos">${b.pos?('+'+b.pos):'—'}</td>
+        <td class="neg">${b.neg||'—'}</td></tr>`).join('')}
+      </tbody></table></div>
     </div>
     <div class="card">
-      <h3>部门积分榜</h3>
-      <table class="tbl"><thead><tr><th>名次</th><th>部门</th><th>合计积分</th></tr></thead><tbody>
+      <h3>部门积分榜（含社长室）</h3>
+      <table class="tbl"><thead><tr><th>名次</th><th>计分分组</th><th>合计积分</th></tr></thead><tbody>
       ${deptBoard.map((d,i)=>`<tr><td class="${['rk1','rk2','rk3'][i]||''}">${i+1}</td><td>${U.esc(d[0])}</td><td><b class="pos">${d[1]}</b></td></tr>`).join('')||'<tr><td colspan="3" class="empty">暂无数据</td></tr>'}
       </tbody></table>
       <h3 style="margin-top:18px">我的积分明细</h3>
@@ -3509,35 +3793,55 @@ Router.reg('points', async main => {
         :'<div class="empty">暂无积分记录</div>'}
     </div>
   </div>`;
+  if(isS && $('#pt_csv')) $('#pt_csv').onclick = () => {
+    const rows = [['姓名','账号','年级班级','计分分组','主要计分部门','总积分','加分合计','扣分合计']];
+    for(const b of board) rows.push([b.user.displayName, b.user.username, b.user.gradeClass||'',
+      ORG.scoreGroupOf(b.user), b.user.primaryDept||'', b.score, b.pos, b.neg]);
+    rows.push([]);
+    rows.push(['时间','姓名','账号','分值','事由','操作人','批号']);
+    for(const l of (Store.points.ledger||[])) rows.push([U.fmtTs(l.ts), l.name, l.username, l.delta,
+      String(l.reason||'').replace(/^【(.+)】/, '$1 '), l.by, l.batchNo||'']);
+    const csv = '\ufeff' + rows.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    U.dl(`积分台账_${new Date().toISOString().slice(0,10)}.csv`, new Blob([csv], {type:'text/csv;charset=utf-8'}));
+    U.toast('积分台账已导出');
+  };
 });
 function deptText(u){
-  const d = ORG.deptOf(u); if(d) return d.club+'·'+d.dept+'·'+d.role;
-  if((u.attrs||[]).includes('社长')) return '社长';
-  if((u.attrs||[]).includes('副社长-摄影社')) return '摄影社·副社长';
-  if((u.attrs||[]).includes('副社长-信息素养小组')) return '信息素养小组·副社长';
-  if((u.attrs||[]).some(a=>a.startsWith('秘书处-'))) return (u.attrs||[]).find(a=>a.startsWith('秘书处-'));
-  return '社员';
+  return ORG.scoreGroupOf(u);
 }
 
-/* ---------- 通知中心 + 审批 ---------- */
+/* ---------- 通知中心 + 审批（v10：审批范围限定 + 多目录申请 + 审批/到期时间展示） ---------- */
 Router.reg('notices', async main => {
   const u = Session.user();
   const ns = Store.myNotices(u);
   const pendAcc = Store.pendingAccessFor(u);
   const pendVid = Store.videoPendingFor(u);
   const mySubs = (Store.requests.access||[]).filter(r=>r.applicantId===u.id).sort((a,b)=>b.ts-a.ts).slice(0,10);
+  // 我的有效授权（供本人核对到期时间）
+  const myGrants = Store.activeGrants(u);
+  const scope = ORG.approverScopeOf(u);
+  const scopeTxt = ORG.isGrantor(u) ? `你的审批范围：${U.esc(scope.label)}` : '';
   main.innerHTML = `
   <div class="crumbs">通知中心</div>
   ${ (pendAcc.length+pendVid.length) ? `
   <div class="card"><h3>待我审批（${pendAcc.length+pendVid.length}）</h3>
-    ${pendAcc.map(r=>`
-      <div class="nitem"><div class="nt">📁 临时权限申请 · ${U.esc(r.folderName)}</div>
-        <div class="nb">申请人：${U.esc(r.applicant)}（${U.esc(r.username)}）　理由：${U.esc(r.reason)}　申请时长：${r.hours}小时</div>
-        <div class="nm2"><span>${U.fmtTs(r.ts)}</span>
+    ${scopeTxt?`<div class="muted" style="margin-bottom:8px">${scopeTxt} · 范围外申请由其他管理岗处理</div>`:''}
+    ${pendAcc.map(r=>{
+      const fs = Store.reqFolders(r);
+      return `
+      <div class="nitem"><div class="nt">📁 临时权限申请 · ${fs.length>1?`共 ${fs.length} 个目录`:U.esc(fs[0]&&fs[0].folderName||'')}</div>
+        <div class="nb">目标目录：${fs.map(f=>`<span class="tag blue" style="margin:0 4px 4px 0">${U.esc(f.folderName)}</span>`).join('')}</div>
+        <div class="nb">申请人：${U.esc(r.applicant)}（${U.esc(r.username)}）　理由：${U.esc(r.reason)}</div>
+        <div class="nb muted">申请时长：${r.hours} 小时 · 批准后有效期至 ${U.fmtTs((r.decidedTs||Date.now()) + r.hours*3600*1000)}</div>
+        <div class="nm2"><span>申请于 ${U.fmtTs(r.ts)}</span>
           <button class="btn sm pri" data-ok="${r.id}">批准并发放密钥</button>
           <button class="btn sm danger" data-no="${r.id}">驳回</button></div>
-      </div>`).join('')}
+      </div>`;}).join('')}
     ${pendVid.map(v=>videoCard(v, u)).join('')}
+  </div>`:''}
+  ${myGrants.length?`<div class="card"><h3>我的有效临时授权（${myGrants.length}）</h3>
+    ${myGrants.map(g=>`<div class="kv"><span class="k">${U.esc(g.folderName||g.folderId)}</span>
+      <span>有效期至 <b>${U.fmtTs(g.until)}</b>（剩余 ${U.fmtDur(g.until-Date.now())}）· 发放人 ${U.esc(g.by||'-')}</span></div>`).join('')}
   </div>`:''}
   <div class="card"><h3>通知列表</h3>
     ${ns.length? ns.map(n=>`
@@ -3547,15 +3851,23 @@ Router.reg('notices', async main => {
         <div class="nm2"><span>${U.fmtTs(n.ts)}</span><span>${U.esc(n.from)}</span></div>
       </div>`).join('') : '<div class="empty">暂无通知</div>'}
   </div>
-  <div class="card"><h3>我的申请记录</h3>
-    ${mySubs.length? `<table class="tbl"><thead><tr><th>目录</th><th>理由</th><th>状态</th><th>审批人</th><th>时间</th></tr></thead><tbody>
-      ${mySubs.map(r=>`<tr><td>${U.esc(r.folderName)}</td><td class="muted">${U.esc(r.reason)}</td>
-      <td><span class="tag ${r.status==='已通过'?'green':r.status==='已驳回'?'red':'orange'}">${r.status}</span></td>
-      <td class="muted">${U.esc(r.decidedBy||'-')}</td><td class="muted">${U.fmtTs(r.ts)}</td></tr>`).join('')}
-    </tbody></table>` : '<div class="empty">暂无申请记录</div>'}
+  <div class="card"><h3>我的权限申请记录</h3>
+    ${mySubs.length? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>目录</th><th>理由</th><th>状态</th><th>审批人</th><th>申请时间</th><th>审批时间</th><th>授权到期</th></tr></thead><tbody>
+      ${mySubs.map(r=>{
+        const g = (Store.requests.grants||[]).filter(x=>x.rid===r.id && x.user===u.id)
+          .sort((a,b)=>b.until-a.until)[0];
+        return `<tr><td class="muted">${U.esc(Store.reqFolders(r).map(f=>f.folderName).join('、'))}</td><td class="muted">${U.esc(r.reason)}</td>
+        <td><span class="tag ${r.status==='已通过'?'green':r.status==='已驳回'?'red':'orange'}">${r.status}</span></td>
+        <td class="muted">${U.esc(r.decidedBy||'-')}</td>
+        <td class="muted">${U.fmtTs(r.ts)}</td>
+        <td class="muted">${r.decidedTs?U.fmtTs(r.decidedTs):'-'}</td>
+        <td class="muted">${(r.status==='已通过'&&g)?U.fmtTs(g.until):'-'}</td></tr>`;}).join('')}
+    </tbody></table></div>` : '<div class="empty">暂无申请记录</div>'}
+    <div class="row" style="margin-top:10px"><button class="btn" id="nq_new">＋ 发起权限申请（可多选目录）</button></div>
   </div>`;
   $$('[data-ok]').forEach(b=>b.onclick=async()=>{ await Store.decideAccess(u, b.dataset.ok, true); U.toast('已批准'); Router.go('notices'); });
   $$('[data-no]').forEach(b=>b.onclick=async()=>{ await Store.decideAccess(u, b.dataset.no, false); U.toast('已驳回'); Router.go('notices'); });
+  if($('#nq_new')) $('#nq_new').onclick = ()=>accessApplyDlg(null);
   bindVideoBtns(u);
   if(ns.some(n=>!(n.readBy||[]).includes(u.id))) Store.markRead(u, ns.map(n=>n.id)).catch(()=>{}); // 后台标记已读，不阻塞渲染（性能）
   refreshBadge(); // 轻量刷新角标（避免整壳重建导致页面卡顿/闪烁）
@@ -3570,6 +3882,91 @@ function refreshBadge(){
     else if(ex) ex.remove();
   });
 }
+/* ---------- 权限发放面板（社长/副社长/处长/副处长 · 可临时收回或修改授权） ---------- */
+Router.reg('grants', async main => {
+  const u = Session.user();
+  if(!canGrantPanel(u)){ main.innerHTML = '<div class="empty">权限发放面板仅对社长、副社长、秘书处处长/副处长开放</div>'; return; }
+  const isMgr = ORG.isGrantor(u);            // 副处长只读
+  const scope = ORG.approverScopeOf(u);
+  const users = Store.users.items.filter(x=>!x.deleted);
+  const nameOf = id => { const t = users.find(x=>x.id===id); return t ? `${t.displayName}（${t.username}）` : (id||'-'); };
+  const all = (Store.requests.grants||[]).slice().sort((a,b)=>b.until-a.until);
+  const act = all.filter(g=>g.until>Date.now() && !g.revoked);
+  const hist = all.filter(g=>g.until<=Date.now() || g.revoked).sort((a,b)=>(b.revoked?b.revoked.ts:b.until)-(a.revoked?a.revoked.ts:a.until));
+  const canMgr = g => isMgr && Store.canManageGrant(u, g);
+  const rowHTML = (g, i, hist_) => {
+    const left = g.until - Date.now();
+    const mgr = canMgr(g);
+    return `<tr>
+      <td>${U.esc(nameOf(g.user))}</td>
+      <td class="muted">${U.esc(g.folderName || (Store.cfg.folders.find(f=>f.id===g.folderId)||{}).name || g.folderId || '-')}</td>
+      <td class="muted">${U.esc(g.by||'-')}</td>
+      <td class="muted">${U.fmtTs(g.ts)}</td>
+      <td>${U.fmtTs(g.until)}${!hist_&&left>0?`<div class="muted" style="font-size:11px">剩余 ${U.fmtDur(left)}</div>`:''}</td>
+      <td>${g.revoked?`<span class="tag red">已收回（${U.esc(g.revoked.by||'')}）</span>`:(left>0?'<span class="tag green">生效中</span>':'<span class="tag plain">已到期</span>')}</td>
+      <td>${!hist_ ? (mgr
+        ? `<span class="row" style="gap:6px;flex-wrap:wrap">
+             <button class="btn sm danger" data-gr="${g.id}" title="立即失效">收回</button>
+             <button class="btn sm" data-ga="${g.id}" title="调整到期时间">修改时长</button></span>`
+        : (isMgr?'<span class="muted" style="font-size:11.5px">超出管理范围</span>':'<span class="muted" style="font-size:11.5px">只读（副处长）</span>')) : '-'}</td></tr>`;
+  };
+  main.innerHTML = `
+  <div class="crumbs">权限发放 · 临时授权管理</div>
+  <div class="card">
+    <h3>当前有效授权（${act.length}）</h3>
+    <div class="muted" style="margin-bottom:10px;line-height:1.9">
+      审批通过的临时访问授权集中在此展示与管控：${isMgr?`你的管理范围：<b style="color:var(--gold2)">${U.esc(scope.label)}</b>（社长可管理全部）`:'副处长为只读视角，如需调整请联系社长或秘书处处长'}。<br>
+      「收回」使授权立即失效；「修改时长」可延长或缩短到期时间。全部操作记录行为日志并通知被授权人。</div>
+    ${act.length? `<div class="tbl-wrap"><table class="tbl"><thead><tr>
+      <th>被授权人</th><th>目录</th><th>发放人</th><th>发放时间</th><th>到期时间</th><th>状态</th><th style="width:170px">操作</th></tr></thead><tbody>
+      ${act.map((g,i)=>rowHTML(g,i,false)).join('')}
+    </tbody></table></div>` : '<div class="empty">暂无生效中的临时授权</div>'}
+  </div>
+  <div class="card">
+    <h3>历史授权（已到期 / 已收回 · 最近 ${Math.min(hist.length,50)} 条）</h3>
+    ${hist.length? `<div class="tbl-wrap"><table class="tbl"><thead><tr>
+      <th>被授权人</th><th>目录</th><th>发放人</th><th>发放时间</th><th>到期时间</th><th>状态</th><th></th></tr></thead><tbody>
+      ${hist.slice(0,50).map((g,i)=>rowHTML(g,i,true)).join('')}
+    </tbody></table></div>` : '<div class="empty">暂无历史授权</div>'}
+  </div>`;
+  $$('[data-gr]').forEach(b=>b.onclick=async()=>{
+    const g = (Store.requests.grants||[]).find(x=>x.id===b.dataset.gr); if(!g) return;
+    if(!await Modal.confirm('收回临时授权', `确定收回「${U.esc(nameOf(g.user))}」对「${U.esc(g.folderName||g.folderId)}」的临时访问权限吗？授权将立即失效。`, '收回')) return;
+    try { await Store.revokeGrant(u, g.id); U.toast('已收回'); Router.go('grants'); }
+    catch(e){ U.toast('收回失败：'+(e.message||e),1); }
+  });
+  $$('[data-ga]').forEach(b=>b.onclick=()=>{
+    const g = (Store.requests.grants||[]).find(x=>x.id===b.dataset.ga); if(!g) return;
+    const m = Modal.open(`<h3>修改授权时长 → ${U.esc(nameOf(g.user))}</h3>
+      <div class="muted" style="line-height:1.8">目录：${U.esc(g.folderName||g.folderId)}<br>当前到期：${U.fmtTs(g.until)}</div>
+      <label class="fl">调整方式</label><select id="ga_m">
+        <option value="2">延长 2 小时</option><option value="24" selected>延长 24 小时</option>
+        <option value="72">延长 72 小时</option><option value="-1">缩短至 1 小时后</option>
+        <option value="0">自定义到期时间</option></select>
+      <label class="fl" id="ga_dl" style="display:none">自定义到期时间</label>
+      <input type="datetime-local" id="ga_d" style="display:none">
+      <div class="foot"><button class="btn" id="ga_c">取消</button><button class="btn pri" id="ga_o">确认调整</button></div>`, {sticky:true});
+    m.querySelector('#ga_c').onclick=()=>m.remove();
+    m.querySelector('#ga_m').onchange = () => {
+      const cus = m.querySelector('#ga_m').value === '0';
+      m.querySelector('#ga_dl').style.display = cus?'block':'none';
+      m.querySelector('#ga_d').style.display = cus?'block':'none';
+      if(cus){ const d = new Date(Date.now()+24*3600*1000); m.querySelector('#ga_d').value =
+        `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:00`; }
+    };
+    m.querySelector('#ga_o').onclick = async () => {
+      const v = m.querySelector('#ga_m').value;
+      let until;
+      if(v === '0'){ until = new Date(m.querySelector('#ga_d').value).getTime(); if(!until){ U.toast('请选择有效时间',1); return; } }
+      else if(v === '-1') until = Date.now() + 3600*1000;
+      else until = Math.max(g.until, Date.now()) + (+v)*3600*1000;
+      try { await Store.adjustGrant(u, g.id, until); U.toast('已调整'); m.remove(); Router.go('grants'); }
+      catch(e){ U.toast('调整失败：'+(e.message||e),1); }
+    };
+  });
+});
+
+/* ---------- 视频申请卡片 ---------- */
 function videoCard(v, u){
   const st = v.steps.map((s,i)=>{
     const cls = s.status==='已通过'?'done':s.status==='已驳回'?'rej':(i===v.step&&v.status==='审批中'?'cur':'');
@@ -3713,7 +4110,9 @@ Router.reg('profile', async main => {
       </div>
       <div class="kv" style="margin-top:10px"><span class="k">账号</span><span>${U.esc(u.username)}</span></div>
       <div class="kv"><span class="k">角色</span><span>${U.esc(roleText(u))}</span></div>
-      <div style="margin-top:14px"><button class="btn pri" id="pf_o">保存个人信息</button></div>
+      <div class="kv"><span class="k">计分分组</span><span>${U.esc(ORG.scoreGroupOf(u))}${ORG.hasDeptChoice(u)?`（主要：${U.esc(u.primaryDept||'未选择，请在账号管理中指定')}）`:''}</span></div>
+      <div style="margin-top:14px"><button class="btn pri" id="pf_o">保存个人信息</button>
+        <button class="btn danger" id="pf_out">⏻ 退出登录</button></div>
     </div>
     <div class="card">
       <h3>修改密码</h3>
@@ -3750,6 +4149,7 @@ Router.reg('profile', async main => {
       U.toast('已保存'); renderShell();
     } catch(e){ U.toast('保存失败：'+(e.message||e),1); }
   };
+  $('#pf_out').onclick = ()=>doLogout();
   $('#pw_o2').onclick = async () => {
     const o=$('#pw_o').value, n=$('#pw_n').value, c=$('#pw_c').value;
     if(!o||!n){ U.toast('请填写完整',1); return; }
@@ -3891,13 +4291,19 @@ function adminAcc(el){
       <button class="btn" id="ac_msg">✉ 发送通知</button></div>
   </div>
   <div class="card">
-    <h3>账号列表（${users.length}）</h3>
+    <h3>账号列表（${users.length}）　<button class="btn sm" id="ac_csv" style="margin-left:auto">⬇ 导出账号信息（CSV · 含积分）</button></h3>
     <div class="muted" style="margin-bottom:8px;line-height:1.8">密码均加盐哈希存储，任何人都无法回看原密码（包括社长）；忘记密码时使用「重置密码」设置新密码，新密码仅显示一次。
-      需要随时查看各账号密码时，可将其存入<b style="color:var(--gold2)">密码保险库</b>（AES-256 加密，仅社长可开）。</div>
-    <table class="tbl"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>密码状态</th><th>状态</th><th style="width:230px">操作</th></tr></thead><tbody>
-    ${users.map(x=>`<tr>
+      需要随时查看各账号密码时，可将其存入<b style="color:var(--gold2)">密码保险库</b>（AES-256 加密，仅社长可开）。<br>
+      计分分组规则：副社长/处长/副处长计入<b style="color:var(--gold2)">社长室</b>；多职务按最高职务，最高职务并列跨部门时需在「编辑信息」中选择主要计分部门（可随时更改）。</div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>账号</th><th>显示名</th><th>角色</th><th>计分分组</th><th>密码状态</th><th>状态</th><th style="width:230px">操作</th></tr></thead><tbody>
+    ${users.map(x=>{
+      const cands = ORG.scoreCandidates(x.attrs);
+      const grp = ORG.scoreGroupOf(x);
+      const need = ORG.hasDeptChoice(x) && !cands.includes(x.primaryDept);
+      return `<tr>
       <td>${U.esc(x.username)}</td><td>${U.esc(x.displayName)}<div class="muted">${U.esc(x.gradeClass||'')}</div></td>
       <td class="muted" style="max-width:200px">${U.esc((x.attrs||[]).join(' / '))}</td>
+      <td>${U.esc(grp)}${ORG.hasDeptChoice(x)?`<div class="muted" style="font-size:11px">${need?'<span class="tag orange">未选主要部门</span>':'主要：'+U.esc(x.primaryDept)+' · 可改'}</div>`:''}</td>
       <td>${pwdState(x)}</td>
       <td><span class="tag ${x.active?'green':'red'}">${x.active?'正常':'停用'}</span></td>
       <td><span class="row" style="gap:6px;flex-wrap:wrap">
@@ -3905,8 +4311,8 @@ function adminAcc(el){
         <button class="btn sm" data-ed="${x.id}">调整角色</button>
         <button class="btn sm" data-ef="${x.id}">编辑信息</button>
         <button class="btn sm" data-ss="${x.id}">${x.active?'停用':'启用'}</button>
-        <button class="btn sm danger" data-de="${x.id}">删除</button></span></td></tr>`).join('')}
-    </tbody></table>
+        <button class="btn sm danger" data-de="${x.id}">删除</button></span></td></tr>`;}).join('')}
+    </tbody></table></div>
   </div>`;
   $('#ac_o').onclick = async () => {
     const username = $('#ac_u').value.trim(), password=$('#ac_p').value.trim();
@@ -3922,11 +4328,26 @@ function adminAcc(el){
       if($('#ac_vault').checked){
         vaultStoreDlg(username, displayName, password, '创建账号初始密码').catch(()=>{});
       }
-      nav2('admin/acc');
+      Router.go('admin/acc');
     } catch(e){ U.toast('创建失败：'+(e.message||e),1); }
   };
   // 密码保险库入口
   $('#ac_vb').onclick = ()=>vaultDlg();
+  // 导出账号信息 CSV（含积分汇总）
+  $('#ac_csv').onclick = () => {
+    const board = Store.board();
+    const bmap = {}; board.forEach(b=>bmap[b.user.id] = b);
+    const rws = [['账号','显示名','姓名','年级班级','角色属性','计分分组','主要计分部门','总积分','加分合计','扣分合计','状态','密码状态','创建时间']];
+    for(const x of users){
+      const b = bmap[x.id];
+      rws.push([x.username, x.displayName, x.realName||'', x.gradeClass||'', (x.attrs||[]).join(' / '),
+        ORG.scoreGroupOf(x), x.primaryDept||'', b?b.score:0, b?b.pos:0, b?b.neg:0,
+        x.active?'正常':'停用', x.pwdChangedAt?('改于 '+U.fmtTs(x.pwdChangedAt)):'初始密码', x.createdAt?U.fmtTs(x.createdAt):'']);
+    }
+    const csv = '\ufeff' + rws.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    U.dl(`账号信息_${new Date().toISOString().slice(0,10)}.csv`, new Blob([csv], {type:'text/csv;charset=utf-8'}));
+    U.toast('账号信息已导出');
+  };
   // 群发通知：全员 / 指定角色 / 指定个人（可同步生成 Word/PDF 公文并归档）
   $('#ac_msg').onclick = () => {
     const roles = ['社长','副社长-摄影社','副社长-信息素养小组','秘书处-处长','秘书处-副处长','秘书处-干事',
@@ -4020,24 +4441,32 @@ function adminAcc(el){
       await Store.setAccountStatus(Session.user(), t, to); U.toast(to?'已启用':'已停用'); nav2('admin/acc');
     }
   });
-  // 编辑信息：显示名 / 姓名 / 年级班级
+  // 编辑信息：显示名 / 姓名 / 年级班级 / 主要计分部门（多职务并列时选择，可随时更改）
   $$('[data-ef]').forEach(b=>b.onclick=()=>{
     const t = Store.users.items.find(x=>x.id===b.dataset.ef); if(!t) return;
+    const cands = ORG.scoreCandidates(t.attrs);
+    const need = ORG.hasDeptChoice(t);
     const m = Modal.open(`<h3>编辑账号信息 → ${U.esc(t.username)}</h3>
       <label class="fl">显示名</label><input id="ef_n" value="${U.esc(t.displayName)}">
       <div class="grid2">
         <div><label class="fl">姓名</label><input id="ef_r" value="${U.esc(t.realName||'')}"></div>
         <div><label class="fl">年级班级</label><input id="ef_g" value="${U.esc(t.gradeClass||'')}" placeholder="如：高一3班"></div>
       </div>
+      ${need?`
+      <label class="fl">主要计分部门（多职务最高级别并列，需指定计分归属，选择后可随时更改）</label>
+      <select id="ef_pd">${cands.map(c=>`<option ${c===t.primaryDept?'selected':''}>${U.esc(c)}</option>`).join('')}</select>
+      <div class="muted" style="font-size:12px;margin-top:4px">当前并列计分分组：${U.esc(cands.join('、'))}</div>`
+      :`<div class="muted" style="margin-top:8px;font-size:12.5px">计分分组：${U.esc(cands[0]||'未分配')}（单一分组，无需选择主要部门）</div>`}
       <div class="foot"><button class="btn" id="ef_c">取消</button><button class="btn pri" id="ef_o">保存</button></div>`, {sticky:true});
     m.querySelector('#ef_c').onclick=()=>m.remove();
     m.querySelector('#ef_o').onclick = async () => {
       const patch = {displayName:m.querySelector('#ef_n').value.trim()||t.displayName,
         realName:m.querySelector('#ef_r').value.trim(), gradeClass:m.querySelector('#ef_g').value.trim()};
+      if(need) patch.primaryDept = m.querySelector('#ef_pd').value;
       try {
         await Store.adminUpdateUser(Session.user(), t, patch);
         Object.assign(t, patch);
-        U.toast('已保存'); m.remove(); nav2('admin/acc');
+        U.toast('已保存'); m.remove(); Router.go('admin/acc');
       } catch(e){ U.toast('保存失败：'+(e.message||e),1); }
     };
   });
@@ -4226,39 +4655,52 @@ function editAttrsDlg(id){
   m.querySelector('#ea_o').onclick = async () => {
     const attrs = Array.from(m.querySelectorAll('#ea input:checked')).map(i=>i.value);
     await Store.setAttrs(Session.user(), t, attrs);
-    U.toast('角色已调整'); m.remove(); nav2('admin/acc');
+    U.toast('角色已调整'); m.remove(); Router.go('admin/acc');
   };
 }
 
-/* --- 积分面板（仅社长）：按《社员积分奖惩章程（试行）》档位选择，仅需填写事由 --- */
+/* --- 积分面板（仅社长 · v10 批量模式）：多账号一次调整，出具一份汇总通知（Word/PDF 公开归档） --- */
 function adminPts(el){
   const users = Store.users.items.filter(x=>!x.deleted);
+  const rows = [];   // 批次：{user, item, delta, reason, batchNo}
+  const CN = ['一','二','三','四','五','六','七','八','九','十','十一','十二','十三','十四','十五','十六','十七','十八','十九','二十'];
   el.innerHTML = `
   <div class="card">
-    <h3>积分调整（仅社长可操作 · 依据《社员积分奖惩章程（试行）》）</h3>
-    <div class="muted" style="margin-bottom:8px;line-height:1.9">分值与依据均按章程附件档位选择，无需手工输入；社长仅需填写事由。
-      调整将记入积分台账并通知当事人；行为记录开关当前：<b style="color:var(--gold2)">${Store.cfg.recordBehavior!==false?'开启':'关闭'}</b>（在系统设置中切换）。</div>
+    <h3>积分调整（仅社长 · 批量模式 · 依据《社员积分奖惩章程（试行）》）</h3>
+    <div class="muted" style="margin-bottom:8px;line-height:1.9">分值与依据均按章程附件档位选择，无需手工输入。可连续为多名社员添加调整项，一次提交后：
+      ① 全部记入积分台账并逐人通知；② 出具<b style="color:var(--gold2)">一份</b>积分调整通知（Word + PDF 双格式，公开级归档，全员可查）。
+      行为记录开关当前：<b style="color:var(--gold2)">${Store.cfg.recordBehavior!==false?'开启':'关闭'}</b>（在系统设置中切换）。</div>
     <div class="grid2">
-      <div><label class="fl">目标账号</label><select id="pt_u">
-        ${users.map(x=>`<option value="${x.id}">${U.esc(x.displayName)}（${U.esc(x.username)} · ${U.esc(deptText(x))}）</option>`).join('')}</select></div>
+      <div><label class="fl">目标账号（可连续添加多人）</label><select id="pt_u">
+        ${users.map(x=>`<option value="${x.id}">${U.esc(x.displayName)}（${U.esc(x.username)} · ${U.esc(ORG.scoreGroupOf(x))}）</option>`).join('')}</select></div>
       <div><label class="fl">积分档位（按章程附件）</label><select id="pt_p">
         ${POINTS_PRESETS.map((g,gi)=>`<optgroup label="${U.esc(g.g)}">${g.items.map((it,ii)=>
           `<option value="${gi}:${ii}">${U.esc(it[1])}　${it[2]}</option>`).join('')}</optgroup>`).join('')}
       </select></div>
     </div>
-    <div class="card" style="margin:8px 0;padding:8px 14px;background:rgba(127,127,127,.06)">
+    <div class="card" style="margin:8px 0;padding:8px 14px;background:rgba(127,127,127,.06);border:none">
       <div class="kv"><span class="k">所选分值</span><span><b id="pt_dv" style="font-size:17px">+1</b> 分　<span class="tag gold" id="pt_tag">+1分/次</span></span></div>
       <div class="kv"><span class="k">认定依据</span><span class="muted" id="pt_note">签到记录</span></div>
     </div>
-    <label class="fl">事由（必填）</label><textarea id="pt_r" style="min-height:56px" placeholder="如：3月12日例会出勤，附签到记录"></textarea>
-    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px">
-      <input type="checkbox" id="pt_rec" checked style="width:auto"> 记录本次行为</label>
-    <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:13px">
-      <input type="checkbox" id="pt_doc" checked style="width:auto">
-      同步生成 Word / PDF 积分决定文书并归档（批号：${Store.peekBatchNo('决')}）</label>
-    <div style="margin-top:12px"><button class="btn pri" id="pt_o">执行调整</button></div>
+    <label class="fl">事由（必填，将写入台账与通知文书）</label><textarea id="pt_r" style="min-height:50px" placeholder="如：3月12日例会出勤，附签到记录"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn pri" id="pt_add">＋ 添加到调整批次</button></div>
+    <div id="pt_rows" style="margin-top:10px"></div>
+    <div id="pt_submit" style="display:none;margin-top:6px;border-top:1px dashed var(--line);padding-top:12px">
+      <label class="fl">本次调整主题（用于通知文书标题，如：2026年3月例会考勤与赛事奖励）</label>
+      <input id="pt_topic" placeholder="如：2026年3月例会考勤与赛事奖励">
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px">
+        <input type="checkbox" id="pt_rec" checked style="width:auto"> 记录本次行为</label>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:13px">
+        <input type="checkbox" id="pt_doc" checked style="width:auto">
+        出具一份积分调整通知（Word/PDF 双格式 · 公开级归档 · 批号：${Store.peekBatchNo('通')}）</label>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:13px">
+        <input type="checkbox" id="pt_dl" style="width:auto"> 同时下载 Word / PDF 到本地</label>
+      <div style="margin-top:12px"><button class="btn pri" id="pt_o">执行批量调整（<span id="pt_n">0</span> 人）</button></div>
+      <div class="muted" id="pt_s" style="margin-top:8px"></div>
+    </div>
   </div>
   <div class="card"><h3>积分台账（最近 ${Math.min((Store.points.ledger||[]).length,100)} 条）</h3>
+    <div class="row" style="margin-bottom:8px"><button class="btn sm" id="pt_csv">⬇ 导出积分台账（CSV）</button></div>
     <div style="max-height:40vh;overflow-y:auto">
     ${(Store.points.ledger||[]).slice(-100).reverse().map(l=>`
       <div class="logline">[${U.fmtTs(l.ts)}] <b>${U.esc(l.name)}</b>（${U.esc(l.username)}）
@@ -4275,41 +4717,90 @@ function adminPts(el){
     $('#pt_note').textContent = it[3] || '-';
   };
   sel.onchange = show; show();
-  $('#pt_o').onclick = async () => {
+  const renderRows = () => {
+    $('#pt_rows').innerHTML = rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead>
+      <tr><th>社员</th><th>档位</th><th>分值</th><th>事由</th><th style="width:70px"></th></tr></thead><tbody>
+      ${rows.map((r,i)=>`<tr>
+        <td>${U.esc(r.user.displayName)} <span class="muted">${U.esc(r.user.gradeClass||'')}</span></td>
+        <td class="muted">${U.esc(r.item[1])}</td>
+        <td><b class="${r.delta>=0?'pos':'neg'}">${r.delta>0?'+':''}${r.delta}</b></td>
+        <td class="muted">${U.esc(r.reason)}</td>
+        <td><button class="btn sm danger" data-pr="${i}">移除</button></td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="muted" style="font-size:12.5px">批次为空：选择账号、档位与事由后点击「添加到调整批次」，可一次添加多名社员。</div>';
+    $('#pt_submit').style.display = rows.length ? 'block' : 'none';
+    $('#pt_n').textContent = rows.length;
+    $$('[data-pr]').forEach(b=>b.onclick=()=>{ rows.splice(+b.dataset.pr,1); renderRows(); });
+  };
+  renderRows();
+  $('#pt_add').onclick = () => {
     const t = Store.users.items.find(x=>x.id===$('#pt_u').value);
     const [gi,ii] = sel.value.split(':').map(Number);
     const it = POINTS_PRESETS[gi].items[ii];
     const r = $('#pt_r').value.trim();
     if(!t){ U.toast('请选择目标账号',1); return; }
     if(!r){ U.toast('请填写事由',1); return; }
-    await Store.addPoints(Session.user(), t, it[0], `【${it[1]}】${r}`, $('#pt_rec').checked);
-    U.toast(`已按章程档位调整：${it[2]}`);
-    if($('#pt_doc').checked){
-      try {
-        const u = Session.user();
-        const {no} = Store.nextBatchNo('决');
-        const title = `关于对${t.displayName}的积分调整决定`;
-        const bodyParas = [
-          {t:`经社长依据《社员积分奖惩章程（试行）》审议批准，现对 ${t.displayName}（${t.gradeClass||'年级班级未填写'}）作出如下积分调整决定：`, st:'body'},
-          {t:`一、调整档位：${it[1]}；`, st:'body'},
-          {t:`二、调整分值：${it[0]>0?'+':''}${it[0]} 分（${it[2]}）；`, st:'body'},
-          {t:`三、认定依据：${it[3]||'—'}；`, st:'body'},
-          {t:`四、事由：${r}。`, st:'body'},
-          {t:'本决定自签发之日起生效，调整已同步记入全社积分台账。', st:'body'}
+    if(rows.some(x=>x.user.id===t.id && x.item[1]===it[1] && x.reason===r)){ U.toast('该调整项已在批次中',1); return; }
+    rows.push({user:t, item:it, delta:it[0], reason:r});
+    $('#pt_r').value = '';
+    U.toast(`已添加：${t.displayName} ${it[0]>0?'+':''}${it[0]} 分`);
+    renderRows();
+  };
+  $('#pt_csv').onclick = () => {
+    const board = Store.board();
+    const rws = [['姓名','账号','年级班级','计分分组','主要计分部门','总积分','加分合计','扣分合计']];
+    for(const b of board) rws.push([b.user.displayName, b.user.username, b.user.gradeClass||'',
+      ORG.scoreGroupOf(b.user), b.user.primaryDept||'', b.score, b.pos, b.neg]);
+    rws.push([]);
+    rws.push(['时间','姓名','账号','分值','事由','操作人','批号']);
+    for(const l of (Store.points.ledger||[])) rws.push([U.fmtTs(l.ts), l.name, l.username, l.delta, String(l.reason||''), l.by, l.batchNo||'']);
+    const csv = '\ufeff' + rws.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    U.dl(`积分台账_${new Date().toISOString().slice(0,10)}.csv`, new Blob([csv], {type:'text/csv;charset=utf-8'}));
+    U.toast('积分台账已导出');
+  };
+  $('#pt_o').onclick = async () => {
+    if(!rows.length){ U.toast('批次为空',1); return; }
+    const btn = $('#pt_o'); btn.disabled = true;
+    const genDoc = $('#pt_doc').checked;
+    const topic = $('#pt_topic').value.trim();
+    if(genDoc && !topic){ U.toast('请填写本次调整主题（用于通知文书标题）',1); btn.disabled=false; return; }
+    const u = Session.user();
+    try {
+      // 1) 取批号 → 批量记账 + 逐人通知
+      let no = '';
+      if(genDoc) no = Store.nextBatchNo('通').no;
+      rows.forEach(r => r.batchNo = no);
+      await Store.addPointsBatch(u, rows, {record:$('#pt_rec').checked});
+      $('#pt_s').textContent = `已记入台账并通知 ${rows.length} 人`;
+      // 2) 一份汇总通知文书（Word/PDF 双格式 · 公开级归档，全员可查）
+      if(genDoc){
+        $('#pt_s').textContent = '正在生成 Word / PDF 汇总通知…';
+        const title = `关于${topic}的积分调整通知`;
+        const paras = [
+          {t:`根据《社员积分奖惩章程（试行）》（信摄秘〔2026〕办字第004号）有关规定，经社长室审议批准，现将本次积分调整事项通知如下：`, st:'body'},
+          {t:'一、调整明细', st:'h1'},
+          ...rows.map((r,i)=>({t:`（${CN[i]||i+1}）${r.user.displayName}${r.user.gradeClass?'（'+r.user.gradeClass+'）':''}：${r.item[1]}，${r.delta>0?'+':''}${r.delta} 分（${r.item[2]}）。事由：${r.reason}。`, st:'body'})),
+          {t:'二、生效与复核', st:'h1'},
+          {t:'以上调整自签发之日起生效，并已同步记入全社积分台账，与本通知一并公示。当事人对调整有异议的，可自公示之日起 3 日内向秘书处提出复核申请。', st:'body'}
         ];
-        const pack = await Office.docPack({title, batchNo:no, to:`${t.displayName}：`, paras:bodyParas});
+        const pack = await Office.docPack({title, batchNo:no, to:'全体社员、各部门：', paras});
         const base = `${no} ${title}`;
-        Office.downloadPack(pack, base);
-        const folder = Store.cfg.folders.find(f=>f.kind==='sec') || (Store.cfg.folders||[])[0];
+        if($('#pt_dl').checked) Office.downloadPack(pack, base);
+        const folder = (Store.cfg.folders||[]).find(f=>f.kind==='common')
+          || (Store.cfg.folders||[]).find(f=>f.kind==='sec') || (Store.cfg.folders||[])[0];
         if(folder) await Store.uploadDocDual(u, folder, {
           baseName:base, docxBuf:pack.docx, pdfBuf:pack.pdf, batchNo:no,
-          level:'干事级', desc:'积分调整决定', tags:['积分','文书','决定'], syncBatch:true,
-          logAction:'生成积分决定文书', logDetail:`${t.displayName} ${it[0]>0?'+':''}${it[0]}分 · Word/PDF 单条目归档`});
-        await Store.log(u, '生成积分决定文书', no, `${t.displayName} ${it[0]>0?'+':''}${it[0]}分（Word/PDF 已归档）`, '成功');
-        U.toast('Word / PDF 决定文书已生成' + (folder?'并归档':''));
-      } catch(err){ U.toast('决定文书生成失败（积分已调整）：'+(err.message||err),1); }
+          level:'公开级', desc:`积分调整通知（${topic}）`, tags:['积分','通知','文书','公示'], syncBatch:true,
+          logAction:'出具积分调整通知', logDetail:`${rows.length} 人 · Word/PDF 双格式公开归档`});
+        await Store.log(u, '出具积分调整通知', no, `${title}（${rows.length} 人 · 公开级归档）`, '成功');
+        U.toast('汇总通知已生成并公开归档：' + no);
+      }
+      U.toast('批量调整完成');
+      rows.length = 0;
+      Router.go('admin/pts');
+    } catch(err){
+      U.toast('批量调整失败：'+(err.message||err),1);
+      btn.disabled = false; $('#pt_s').textContent = '';
     }
-    nav2('admin/pts');
   };
 }
 
