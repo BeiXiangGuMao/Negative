@@ -338,33 +338,74 @@ window.__PROBE = (async () => {
     return 'direct';
   } catch(e) { return 'frame'; }
 })();
-/* ===== 引擎追新（v10.1 根治，2026-09-28 事故复盘） =====
- * 事故：ysepan 每次上传都生成新直链，旧启动器烘焙的 config/引擎直链永远指向部署
- * 时刻的静态文件 —— v10 只更新了网盘侧，启动器仍读 v9.1 旧文件，全员停在旧版。
- * 根治：引擎指针（appVer/engineUrl/engineTs）写进 GitHub 仓库 bootpool.json ——
- * URL 永久稳定、无直链轮换、Actions 每日 08:55 刷新且支持手动触发。
- * 启动器每次启动拉取比对：指针比烘焙基线新 → 用指针引擎；否则用内嵌/烘焙引擎。
- * 【部署约定】网盘传完新引擎后，到 GitHub Actions 手动触发一次 refresh-bootpool，
- *   一分钟内全社团自动追新（每日 08:55 亦会自动同步）。 */
+/* ===== 引擎追新 + 直链预检（v10.4 完全体，2026-10-05 事故复盘） =====
+ * v10.1 事故：启动器指针命中即用，不验证引擎直链存活 —— ysepan 旧直链数天后被
+ * 平台清理（实测 v10.1 直链 404「该文件不存在,已被删除或空间已清空」），启动器
+ * 把 ysepan 错误页原样呈现给全体用户。
+ * v10.4 根治三件套：
+ *  ① bootpool.json v2：engineUrl（主指针）+ engineUrls[]（备选池）+ cfgBootUrl（config 自举直链）
+ *  ② __OK() 直链预检：加载前先 fetch 验证是真实 SVG 应用（CORS 已开放），错误直链
+ *     绝不进入 iframe —— 「该文件不存在」这类平台错误页永远到不了用户眼前
+ *  ③ 多候选依序兜底：指针 → 备选池 → 烘焙直链 → cfgBootUrl 解析，全部失败才出引导页 */
 var BOOTPOOL_LAUNCH_URL = "https://beixianggumao.github.io/Negative/bootpool.json";
-var __ENGINE_TS = 1790610646155;   // 烘焙基线：只接受比它更新的指针（防旧清单把引擎换回旧版）
-var __SVG_URL  = "https://ys-e.ysepan.com/wap/beixianggumao/Hc4IUA7Iei6g2RW/IiClCERwg8dNd8meIydAIKKCOac9J/%E7%A4%BE%E5%9B%A2%E6%96%87%E6%A1%A3%E7%B3%BB%E7%BB%9F.svg";
-function __LATEST_ENGINE(){
+var __ENGINE_TS = 1791178228432;   // 烘焙基线：只接受比它更新的指针（防旧清单把引擎换回旧版）
+var __SVG_URL  = "https://ys-c.ysepan.com/wap/beixianggumao/Hc4IUA7Iei6g2RW/4iC53COwf8ckcAmegydAILiBNAc9J/%E7%A4%BE%E5%9B%A2%E6%96%87%E6%A1%A3%E7%B3%BB%E7%BB%9F.svg";
+var __SVG_VER  = "v10.4-20261005";
+function __VRANK(v){ var m = /^v(d+)(?:.(d+))?/i.exec(String(v||'')); return m ? (+m[1])*1000 + (+m[2]||0) : 0; }
+function __POOL(){
   return new Promise(function(res){
     var done = false;
     function fin(v){ if(!done){ done = true; clearTimeout(tm); res(v); } }
-    var tm = setTimeout(function(){ fin(null); }, 3500);
+    var tm = setTimeout(function(){ fin(null); }, 2500);
     if (!BOOTPOOL_LAUNCH_URL) return fin(null);
     fetch(BOOTPOOL_LAUNCH_URL + (BOOTPOOL_LAUNCH_URL.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now(), {cache:'no-store'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
-        if (j && j.engineUrl && /ysepan\.com/i.test(j.engineUrl) && (j.engineTs || 0) > __ENGINE_TS) {
-          console.log('launcher: bootpool 引擎指针更新 ->', j.appVer || '(?)', j.engineUrl);
+        if (j && (j.engineUrl || (j.engineUrls && j.engineUrls.length))) {
+          console.log('launcher: bootpool 就绪', j.appVer || '(?)');
           fin(j);
         } else fin(null);
       })
       .catch(function(){ fin(null); });
   });
+}
+/* 引擎直链预检：确认可达且为 SVG 应用（而非 ysepan 错误页）才允许进入 iframe */
+function __OK(url){
+  return new Promise(function(res){
+    var done = false;
+    function fin(v){ if(!done){ done = true; clearTimeout(tm); res(v); } }
+    var tm = setTimeout(function(){ fin(false); }, 6000);
+    fetch(url, {cache:'no-store'}).then(function(r){
+      if(!r.ok) return fin(false);
+      return r.text().then(function(t){ fin(t.indexOf('<svg') >= 0 && /v10\./.test(t)); })
+        .catch(function(){ fin(false); });
+    }).catch(function(){ fin(false); });
+  });
+}
+async function __PICK(){
+  var pool = null;
+  try { pool = await __POOL(); } catch(e) {}
+  var cands = [];
+  /* 指针版本不低于烘焙版时才优先指针 —— 防止 Actions 停摆后旧指针把用户拉回旧引擎 */
+  if (pool && pool.engineUrl && __VRANK(pool.appVer) >= __VRANK(__SVG_VER)) cands.push(pool.engineUrl);
+  if (pool && pool.engineUrls) (pool.engineUrls||[]).forEach(function(u){ cands.push(u); });
+  cands.push(__SVG_URL);
+  if (pool && pool.cfgBootUrl) {
+    try {
+      var j = await fetch(pool.cfgBootUrl + (pool.cfgBootUrl.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now(), {cache:'no-store'})
+        .then(function(r){ return r.ok ? r.json() : null; });
+      if (j && j.engineUrl) cands.push(j.engineUrl);
+    } catch(e) {}
+  }
+  var seen = {};
+  for (var i = 0; i < cands.length; i++) {
+    var u = cands[i];
+    if (!u || seen[u]) continue; seen[u] = 1;
+    var ok = await __OK(u);
+    console.log('launcher: 预检', ok ? '✓' : '✗', u);
+    if (ok) return u;
+  }
+  return null;
 }
 async function __LAUNCH(){
   let mode = 'frame';
@@ -374,44 +415,43 @@ async function __LAUNCH(){
       new Promise(res => setTimeout(() => res('frame'), 8000))
     ]);
   } catch(e) { mode = 'frame'; }
+  var url = await __PICK();
   if (mode === 'direct') {
-    /* 先查追新：云端有更新则改用 iframe 加载最新引擎（内嵌快照仅作快速回退） */
-    var up = null;
-    try { up = await __LATEST_ENGINE(); } catch(e) {}
-    if (up && up.engineUrl) { __FRAME_AT(up.engineUrl); return; }
+    /* 先查追新：云端有更新（预检通过）则改用 iframe 加载最新引擎（内嵌快照仅作快速回退） */
+    if (url && url !== __SVG_URL) { __FRAME_AT(url); return; }
     try { bootApp(); } catch(e) { console.error('boot fail', e); }
     return;
   }
-  __FRAME_AT(__SVG_URL);
+  __FRAME_AT(url);
 }
 function __FRAME_AT(SVG_URL){
   var app = document.getElementById('app');
   document.title = '社团文档归档权限系统 · 定格未来共创无限';
   app.setAttribute('data-mode','light');
   app.style.cssText = 'margin:0;height:100vh;background:#181c27;overflow:hidden';
-  var h = '<iframe src="' + SVG_URL + '" title="社团文档归档权限系统" allow="clipboard-write" '
-        + 'style="position:fixed;inset:0;width:100%;height:100%;border:0;display:block"></iframe>';
+  var h;
   if (SVG_URL) {
-    h += '<div id="ld_badge" style="position:fixed;right:14px;bottom:14px;z-index:99999;'
-       + 'background:rgba(24,28,39,.88);color:#cbd3e1;font:12px/1.7 system-ui,-apple-system,sans-serif;'
-       + 'padding:8px 13px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);backdrop-filter:blur(6px)">'
-       + '⚡ 已切换网盘应用引擎（当前托管平台跨域受限）　'
-       + '<a href="' + SVG_URL + '" target="_blank" rel="noopener" style="color:#7ab8ff;text-decoration:none">新窗口打开↗</a>　'
-       + '<span id="ld_x" style="cursor:pointer;opacity:.65">✕</span></div>';
+    h = '<iframe src="' + SVG_URL + '" title="社团文档归档权限系统" allow="clipboard-write" '
+      + 'style="position:fixed;inset:0;width:100%;height:100%;border:0;display:block"></iframe>'
+      + '<div id="ld_badge" style="position:fixed;right:14px;bottom:14px;z-index:99999;'
+      + 'background:rgba(24,28,39,.88);color:#cbd3e1;font:12px/1.7 system-ui,-apple-system,sans-serif;'
+      + 'padding:8px 13px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);backdrop-filter:blur(6px)">'
+      + '⚡ 已切换网盘应用引擎（当前托管平台跨域受限）　'
+      + '<a href="' + SVG_URL + '" target="_blank" rel="noopener" style="color:#7ab8ff;text-decoration:none">新窗口打开↗</a>　'
+      + '<span id="ld_x" style="cursor:pointer;opacity:.65">✕</span></div>';
   } else {
-    h += '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;'
-       + 'color:#fff;font:15px/2 system-ui,sans-serif;text-align:center">应用引擎地址未配置，请联系管理员重新部署</div>';
+    /* v10.4：全部候选直链预检失败 —— 给出可操作的引导页而非 ysepan 错误页 */
+    h = '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#181c27">'
+      + '<div style="color:#e7ecf5;font:15px/2.1 system-ui,-apple-system,sans-serif;max-width:560px;padding:28px;text-align:center">'
+      + '<div style="font-size:22px;font-weight:700;margin-bottom:10px;color:#fff">应用引擎暂时无法自动接入</div>'
+      + '<div style="opacity:.85">所有引擎直链均未通过预检（可能网盘平台临时故障，或发布侧尚未更新指针）。<br>'
+      + '请稍后刷新本页重试；或联系社长获取最新「社团文档系统.svg」直链在新窗口打开。</div>'
+      + '<button onclick="location.reload()" style="margin-top:18px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font:600 14px/1 system-ui,sans-serif;padding:10px 26px;cursor:pointer">重新尝试</button>'
+      + '</div></div>';
   }
   app.innerHTML = h;
   var x = document.getElementById('ld_x');
   if (x) x.onclick = function(){ var b = document.getElementById('ld_badge'); if (b) b.remove(); };
-  /* frame 模式异步追新：bootpool 指针比烘焙基线新 → 无感切换 iframe */
-  __LATEST_ENGINE().then(function(up){
-    if (up && up.engineUrl && up.engineUrl !== SVG_URL) {
-      var f = app.querySelector('iframe');
-      if (f) { f.src = up.engineUrl; console.log('launcher: engine updated ->', up.engineUrl); }
-    }
-  });
 }
 ;
 /* ================= core.js · 工具 / YST API / CP-ABE / 数据层 / 权限引擎 ================= */
@@ -431,7 +471,7 @@ const APPROOT = () => document.getElementById('app');          // SVG文档无bo
 const IS_SVG_DOC = (document.contentType === 'image/svg+xml') || (document.documentElement.namespaceURI !== XHTML);
 /* 应用版本（与 config.json 的 appVer 对照：云端更高时顶部提示「打开最新版」，
  * 配合启动器动态引擎地址实现「更新必达」，避免旧入口停留旧版 */
-const APP_VER = 'v10.1-20260928';
+const APP_VER = 'v10.4-20261005';
 // 版本序数：v9.1 → 9001，用于 syncEngineSignal 防旧引擎回写降级（v9.1 事故教训）
 function verRank(v){ const m = /^v(\d+)(?:\.(\d+))?/i.exec(String(v||'')); return m ? (+m[1])*1000 + (+m[2]||0) : 0; }
 if (IS_SVG_DOC) {
@@ -840,10 +880,12 @@ const YST = (() => {
   // 引导凭证（游客JWT + 管理密码），管理密码分段混淆存放
   const _p1='THl4MA==', _p2='NjAyMA==';
   const ADMIN_PWD = (()=>{ try{ return atob(_p1)+atob(_p2); }catch(e){ return ''; } })(); // Lyx06020
-  const BOOT_GUEST = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiZWl4aWFuZ2d1bWFvIiwianRpIjoiNjI0OTQwNjc2MTkiLCJzamsiOiJ5c2Q3IiwiZXhwIjoxNzkwODYxMjcxLCJpc3MiOiJNeVNlY3VyZUlzc3VlciIsImF1ZCI6WyJNeVNlY3VyZUF1ZGllbmNlIiwiTXlTZWN1cmVBdWRpZW5jZSJdLCJnbHkiOiIxIn0.T6YybvUcYNPKN2Sbi-cUONQXdNo392IssHpEQrU1pEg";
-  const CFG_BOOT_URL = "https://ys-e.ysepan.com/wap/beixianggumao/Hc4JUA7Iei6g2RW/GjD5D2Sxh9d7dmCfu5hPJOICQn2R/config.json";
+  const BOOT_GUEST = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiZWl4aWFuZ2d1bWFvIiwianRpIjoiNjI0OTQwNjMwMzIiLCJzamsiOiJ5c2Q3IiwiZXhwIjoxNzkxNDM3NDE5LCJpc3MiOiJNeVNlY3VyZUlzc3VlciIsImF1ZCI6WyJNeVNlY3VyZUF1ZGllbmNlIiwiTXlTZWN1cmVBdWRpZW5jZSJdLCJnbHkiOiIxIn0.-IRa--kOlrrXEmNfdV0fczOvevzxNSzNAtjSnQImyUo";
+  const CFG_BOOT_URL = "https://ys-d.ysepan.com/wap/beixianggumao/Hc4JUA7Iei6i3DD/4jD640Pxg9dld3nHGzeBJMjCOA,AL/config.json";
   const BOOT_POOL_URL = "https://beixianggumao.github.io/Negative/bootpool.json";
-  const BUILD_TS = 1790610646155;
+  const BUILD_TS = 1791178228432;
+  /* 构建注入的三个常量位于本闭包内；发布到 window 供 store.healConfig / ui2.checkEngineUpdate 使用 */
+  try { window.CFG_BOOT_URL = CFG_BOOT_URL; window.BOOT_POOL_URL = BOOT_POOL_URL; window.BUILD_TS = BUILD_TS; } catch(e) {}
   let tk = localStorage.getItem('yst_tk') || '';
   let renewing = null;
   let extraTks = [];  // 运行时注入的候选令牌（config.sysToken / sysTokens 历史池）
@@ -872,20 +914,31 @@ const YST = (() => {
    *   ② 构建时烘入的 WebTemp config.json 直链（部署后短期有效）
    * 两者均为免鉴权 wap/静态直读，CORS 开放；失败静默跳过，不阻塞启动。 */
   let _bootFed = false;
+  const BOOT_CACHE_KEY = 'fzsy_boot_cache';   // v10.4：引导令牌本机缓存（GitHub 慢/超时时立即可用）
+  function bootCacheLoad(){ try { const c = JSON.parse(localStorage.getItem(BOOT_CACHE_KEY)||'null');
+    return (c && Array.isArray(c.tokens)) ? c.tokens : []; } catch(e){ return []; } }
+  function bootCacheSave(tokens){ try { const pool = [...new Set(tokens.filter(Boolean))].slice(0, 12);
+    localStorage.setItem(BOOT_CACHE_KEY, JSON.stringify({ts:Date.now(), tokens:pool})); } catch(e){} }
   async function feedBootTokens(){
     if(_bootFed) return;
     _bootFed = true;
+    /* v10.4：先注入本机缓存的上次成功引导池 —— GitHub Pages 慢/被墙/超时
+     * 或 bootpool 未及时更新时，任何曾经成功启动过的设备都能秒级续期 */
+    bootCacheLoad().forEach(pushExtra);
     const jobs = [];
     const grab = (url, pick) => {
       if(!url) return;
       jobs.push(fetch(url + (url.includes('?')?'&':'?') + 't=' + Date.now(), {cache:'no-store'})
         .then(r => r.ok ? r.json() : null)
-        .then(j => { if(j) (pick(j)||[]).forEach(pushExtra); })
+        .then(j => { if(j){ const ts = (pick(j)||[]).filter(Boolean); if(ts.length){
+          ts.forEach(pushExtra);
+          bootCacheSave([...bootCacheLoad(), ...ts]);   // 成功拉到 → 刷新本机缓存
+        } } })
         .catch(()=>{}));
     };
     grab(BOOT_POOL_URL, j => j.tokens || []);
     grab(CFG_BOOT_URL, j => [].concat(j.sysTokens || [], j.sysToken ? [j.sysToken] : []));
-    if(jobs.length) await Promise.race([Promise.all(jobs), new Promise(res => setTimeout(res, 3500))]);
+    if(jobs.length) await Promise.race([Promise.all(jobs), new Promise(res => setTimeout(res, 2500))]);
   }
 
   // 续期：依次尝试 当前token / bootpool·config直链自举池 / config中转token / 内嵌引导token
@@ -903,7 +956,15 @@ const YST = (() => {
     if(renewing) return renewing;
     renewing = (async () => {
       try { await feedBootTokens(); }catch(_){}
-      const candidates = [...new Set([tk, ...extraTks, BOOT_GUEST].filter(Boolean))];
+      const now = Date.now();
+      /* v10.4 提速核心：候选令牌先按 exp 过滤+按剩余有效期降序 —— 只试仍有效的，
+       * 把旧版「15+ 个候选串行盲试、每个一次网络往返」压到 1~2 次；
+       * 无法解析载荷的令牌保留在队尾兜底 */
+      const candidates = [...new Set([tk, ...extraTks, BOOT_GUEST].filter(Boolean))]
+        .map(t => { const p = U.jwtPay(t); return {t, exp: (p && p.exp ? p.exp*1000 : 0)}; })
+        .filter(x => !x.exp || x.exp > now + 60*1000)
+        .sort((a,b) => b.exp - a.exp)
+        .map(x => x.t);
       const errs = [];
       for(const t of candidates){
         try{
@@ -914,7 +975,11 @@ const YST = (() => {
           });
           if(r.status !== 200) { errs.push(r.status); continue; }
           const d = await r.json();
-          if(d.token){ setTk(d.token); pushExtra(d.token); return d; }
+          if(d.token){
+            setTk(d.token); pushExtra(d.token);
+            bootCacheSave([d.token, ...bootCacheLoad(), ...extraTks]);   // 新鲜令牌入本机缓存
+            return d;
+          }
         }catch(e){ errs.push(String(e).slice(0,40)); }
       }
       const msg = '系统令牌续期失败(' + errs.join(',') + ')。已自动尝试全部 ' + candidates.length + ' 个候选令牌；' +
@@ -1554,14 +1619,37 @@ const Store = (() => {
     status(){ return FILES.map(n => ({name:n, has: !!localStorage.getItem(this.key(n))})); }
   };
 
-  /* ---------- WebTemp 目录列表缓存（6s TTL，减少 wjdq 往返） ---------- */
+  /* ---------- WebTemp 目录列表：6s TTL 缓存 + 本机目录缓存兜底（v10.4） ----------
+   * v10.4 根治「部分账户主页数据全 0」：令牌链断裂/网络故障时 wjdq 失败 → 旧版
+   * loadAllFallback 只剩空快照 → 主页全 0。现在 wjdq 成功后把目录列表（各数据文件
+   * 的 bh/pz/fwq/xzpz）存本机；失败时回退缓存 —— wap 直读免鉴权且长期有效，
+   * 数据浏览完全不受令牌影响（仅上传/删除受限）。 */
   let _dir = null, _dirTs = 0;
   const DIR_TTL = 6000;
+  const DIR_CACHE_KEY = 'fzsy_dir_cache';
+  function saveDirCache(r){
+    try { const slim = { wt: WT && WT.bh, xzpz: r.ml && r.ml.xzpz, ts: Date.now(),
+      lb: (r.lb||[]).filter(f => f && f.wjm && f.wjm.endsWith('.json'))
+           .map(f => ({bh:f.bh, wjm:f.wjm, pz:f.pz, fwq:f.fwq})).slice(0, 80) };
+      localStorage.setItem(DIR_CACHE_KEY, JSON.stringify(slim)); } catch(e){}
+  }
+  function loadDirCache(){
+    try { const c = JSON.parse(localStorage.getItem(DIR_CACHE_KEY)||'null');
+      if(c && c.wt === (WT && WT.bh) && Array.isArray(c.lb) && c.lb.length)
+        return { lb:c.lb, ml:{xzpz:c.xzpz}, _cached:true };
+    } catch(e){} return null;
+  }
   async function dirList(force){
     if(!force && _dir && Date.now() - _dirTs < DIR_TTL) return _dir;
-    const r = await YST.wjdq(WT.bh);
-    _dir = r; _dirTs = Date.now();
-    return r;
+    try {
+      const r = await YST.wjdq(WT.bh);
+      _dir = r; _dirTs = Date.now(); saveDirCache(r); return r;
+    } catch(e) {
+      const c = loadDirCache();
+      if(c){ console.warn('wjdq 失败，启用本机目录缓存（离线可读模式）:', (e && e.message) || e);
+        _dir = c; _dirTs = Date.now(); return c; }
+      throw e;
+    }
   }
 
   function init(bh){ WT = {bh}; }
@@ -1599,8 +1687,50 @@ const Store = (() => {
     return entry.promise;
   }
 
+  /* ---------- config 防踩踏合并（v10.3 · 2026-10-01 事故根治） ----------
+   * 事故：某客户端启动时 config.json 读取一次失败 → 内存态落空 defaults（folders=[]），
+   * 之后任意一次 config 写入（令牌续期 / 引擎自报 / 批号持久化）把空配置整体回传，
+   * 12 个目录定义与批号计数器全部蒸发 → 目录树清空、文书归档静默跳过。
+   * 根治：config.json 每次上传前先拉取远端最新做定向合并——
+   *   folders  : 本地为空而远端非空 → 整体采用远端（空配置绝不覆盖非空目录表）
+   *   batch    : 逐键取 max（计数器单调，防重号也防回退）
+   *   batchKinds: 本地为空才采用远端
+   *   sysToken*: 本地已设置（刚续期，最新鲜）优先，否则补远端
+   *   engine三键与 appVer: 按 verRank 只升不降（旧引擎自报不得拖回旧直链）
+   * 合并失败（远端读取异常）不阻塞本次写入：本地上传路径仍可用（LS 快照双保险兜底）。 */
+  async function mergeConfigFromRemote(local){
+    let remote = null;
+    try { remote = await readFile('config'); } catch(e){ return -1; }
+    if(!remote || typeof remote !== 'object') return -1;
+    const rf = Array.isArray(remote.folders) ? remote.folders : [];
+    if(rf.length && !(local.folders||[]).length) local.folders = JSON.parse(JSON.stringify(rf));
+    const rb = (remote.batch && typeof remote.batch === 'object') ? remote.batch : {};
+    local.batch = local.batch || {};
+    for(const k of Object.keys(rb)){
+      const rv = +rb[k]||0, lv = +local.batch[k]||0;
+      if(rv > lv) local.batch[k] = rv;
+    }
+    if((remote.batchKinds != null) && (local.batchKinds == null)) local.batchKinds = remote.batchKinds;
+    if(local.sysTokenTs == null && remote.sysToken != null){
+      local.sysToken = remote.sysToken; local.sysTokenTs = remote.sysTokenTs;
+      local.sysTokens = remote.sysTokens || local.sysTokens;
+    }
+    const rk = verRank(remote.engineVer||''), lk = verRank(local.engineVer||'');
+    if(rk > lk){
+      local.engineUrl = remote.engineUrl; local.engineVer = remote.engineVer; local.engineTs = remote.engineTs;
+    }
+    if(verRank(remote.appVer||'') > verRank(local.appVer||'')) local.appVer = remote.appVer;
+    if(local.recordBehavior == null && remote.recordBehavior != null) local.recordBehavior = remote.recordBehavior;
+    return rf.length;    // 返回远端目录表规模（-1=读取失败），供硬闸门判断
+  }
   async function writeFile(name){
     const data = state()[name];
+    if(name === 'config'){
+      // 硬闸门：合并后目录表仍为空（无论远端是否读到）→ 拒绝写入（标脏等冲刷重试）。
+      // 空目录表在本系统永远是异常态：首装/恢复由部署脚本与备份恢复路径（putDataFile）完成，不走此门。
+      await mergeConfigFromRemote(data);
+      if(!(data.folders||[]).length) throw new Error('config 防踩踏闸门：目录表为空，拒绝写入空配置');
+    }
     data._ts = Date.now();
     const json = JSON.stringify(data, null, 1);
     // 排序值递增（免 wjdq 探测），旧版本清理异步执行不阻塞
@@ -1659,18 +1789,25 @@ const Store = (() => {
         setState(n, snap || defaults(n));
         return;
       }
-      try { setState(n, await YST.readJSON(YST.dlUrl(latest[n], ml.xzpz))); }
-      catch(e){
-        console.warn('数据文件读取失败，使用快照兜底:', n, e.message||e);
-        const snap = LS.get(n);
-        if(snap) setState(n, snap); else setState(n, defaults(n));
+      let v = null;
+      for(let i=0;i<2;i++){                     // v10.4：瞬时读取失败自动重试一次
+        try { v = await YST.readJSON(YST.dlUrl(latest[n], ml.xzpz)); break; }
+        catch(e){ if(i===0) await new Promise(r=>setTimeout(r, 300));
+          else console.warn('数据文件读取失败（已重试），使用快照兜底:', n, (e && e.message) || e); }
       }
+      if(v) setState(n, v);
+      else { const snap = LS.get(n); if(snap) setState(n, snap); else setState(n, defaults(n)); }
     }));
     // 结构健壮性补齐
     for(const n of FILES){
       const v = state()[n];
       if(!v || typeof v !== 'object') setState(n, defaults(n));
     }
+    // v10.4：关键数据健康校验 —— 远端存在数据文件却全部读成空（快照污染/部分失败），
+    // 视为加载失败走降级重建，绝不让主页显示全 0 假数据
+    const criticalEmpty = (users.items.length===0) && (meta.items.length===0) && (points.ledger.length===0);
+    if(criticalEmpty && (latest.users || latest.meta || latest.points))
+      throw new Error('关键数据读取为空但远端存在数据文件');
     if(!cfg.folders) cfg.folders = [];
     if(!users.items) users.items = [];
     if(!meta.items) meta.items = [];
@@ -1680,8 +1817,43 @@ const Store = (() => {
     if(!requests.grants) requests.grants = [];
     if(!requests.video) requests.video = [];
     if(!points.ledger) points.ledger = [];
+    await healConfig();                       // v10.3：config 目录表空自愈（从部署自举源回拉）
     _degraded = false;
     return state();
+  }
+  /* ---------- config 空目录自愈（v10.3） ----------
+   * 启动后发现 cfg.folders 为空（config 读取失败落空 defaults / 遭旧版踩踏）：
+   * 从构建时烘入的 config 自举直链（部署侧 config，含完整目录表/批号/文种）回拉恢复，
+   * 并标脏回写网盘 —— 配套 writeFile 的防踩踏合并，彻底关死「空配置覆盖」链条。 */
+  async function healConfig(){
+    const BOOT_URL = (typeof window !== 'undefined' && window.CFG_BOOT_URL) || '';
+    if((cfg.folders||[]).length || !BOOT_URL) return;
+    try {
+      const r = await fetch(BOOT_URL + (BOOT_URL.includes('?')?'&':'?') + 't=' + Date.now(), {cache:'no-store'});
+      if(!r.ok) return;
+      const boot = await r.json();
+      if(!boot || typeof boot !== 'object') return;
+      const bf = Array.isArray(boot.folders) ? boot.folders : [];
+      if(!bf.length) return;
+      cfg.folders = JSON.parse(JSON.stringify(bf));
+      if(cfg.batch == null || !Object.keys(cfg.batch).length) cfg.batch = boot.batch || {};
+      if(cfg.batchKinds == null) cfg.batchKinds = boot.batchKinds || null;
+      if(!cfg.sysToken && boot.sysToken){ cfg.sysToken = boot.sysToken; cfg.sysTokenTs = boot.sysTokenTs; cfg.sysTokens = boot.sysTokens || []; }
+      /* 自举源可能是旧部署（批号偏旧）：尽力再读一次远端最新 config，批号逐键取 max、
+       * 目录表以远端为准 —— 把 healed 会话的计数器偏差降到最低（写回时合并闸门再兜一层）。 */
+      try {
+        const remote = await readFile('config');
+        if(remote && typeof remote === 'object'){
+          if(Array.isArray(remote.folders) && remote.folders.length) cfg.folders = JSON.parse(JSON.stringify(remote.folders));
+          const rb = (remote.batch && typeof remote.batch === 'object') ? remote.batch : {};
+          cfg.batch = cfg.batch || {};
+          for(const k of Object.keys(rb)){ const rv = +rb[k]||0, lv = +cfg.batch[k]||0; if(rv > lv) cfg.batch[k] = rv; }
+          if((remote.batchKinds != null) && cfg.batchKinds == null) cfg.batchKinds = remote.batchKinds;
+        }
+      } catch(_){}
+      markDirty('config');                       // 自愈结果回写网盘（经防踩踏闸门）
+      console.warn('config 目录表为空，已从自举源恢复', bf.length, '个目录');
+    } catch(e){ console.warn('config 自愈失败（不阻塞启动）:', e.message || e); }
   }
   /* ---------- 降级模式：网盘令牌链条全失效时，用本机快照启动（可登录/浏览/操作，
    * 操作数据留在本机快照，令牌恢复后由冲刷/写回机制同步回网盘，不丢失） ---------- */
@@ -2491,28 +2663,32 @@ const Store = (() => {
     return entry;
   }
   /* ---------- 双格式单条目归档（Word + PDF 成对上传 · 注册表仅一条记录） ----------
-   * 两份文件各自 CP-ABE 加密上传，meta 条目以 formats:{docx,pdf} 持有双指针；
-   * entry.disk 指向 Word 版（保持与旧版预览/下载兼容），导出格式由前端选择。 */
+   * 两份文件成对上传（v10.3 起加密可选：encrypt!==false 时各自 CP-ABE 加密），
+   * meta 条目以 formats:{docx,pdf} 持有双指针；entry.disk 指向 Word 版（保持与旧版
+   * 预览/下载兼容），导出格式由前端选择。文书生成与手动上传共用本入口。 */
   async function uploadDocDual(u, folder, form){
     const level = form.level || '干事级';
     if(!ORG.canSetLevel(u, level)) throw new Error('密级超出你的权限等级：归档文件只能设置自己权限等级及以下的密级');
-    const policy = PERM.policyOf(level, folder);
+    const encrypt = form.encrypt !== false;
+    const policy = encrypt ? PERM.policyOf(level, folder) : null;
     const upOne = async (buf, name) => {
+      if(!encrypt) return YST.upload(folder.bh, name, buf, null, nextJsq(folder.bh));
       const cbuf = await CPABE.encrypt(buf, policy);
       return YST.upload(folder.bh, name + '.cpabe', cbuf, null, nextJsq(folder.bh));
     };
     const dW = await upOne(form.docxBuf, form.baseName + '.docx');
     const dP = await upOne(form.pdfBuf, form.baseName + '.pdf');
-    const fW = {name:form.baseName + '.docx', size:form.docxBuf.byteLength, encrypted:true, policy, disk:dW};
-    const fP = {name:form.baseName + '.pdf',  size:form.pdfBuf.byteLength,  encrypted:true, policy, disk:dP};
+    const fW = {name:form.baseName + '.docx', size:form.docxBuf.byteLength, encrypted:encrypt, policy, disk:dW};
+    const fP = {name:form.baseName + '.pdf',  size:form.pdfBuf.byteLength,  encrypted:encrypt, policy, disk:dP};
     const entry = {
       id:U.uid(), folderId:folder.id, name:fW.name, ts:Date.now(),
       uploaderId:u.id, uploader:u.displayName, size:fW.size + fP.size,
       kind:'doc', batchNo:form.batchNo||'', desc:form.desc||'', tags:form.tags||['文书'],
-      level, encrypted:true, policy, history:[], downloads:0, deleted:false,
+      level, encrypted:encrypt, policy, history:[], downloads:0, deleted:false,
       dual:true, formats:{docx:fW, pdf:fP},
       disk:dW, xzpz:folder.xzpz||''
     };
+    if(!encrypt) delete entry.policy;
     if(form.contentText) entry.contentText = String(form.contentText).slice(0, 5000);
     await putEntry(entry);
     syncFolderXzpz(folder, entry).catch(()=>{});
@@ -2520,6 +2696,10 @@ const Store = (() => {
       form.logDetail || 'Word/PDF 双格式 · 单条目归档', '已归档');
     if(form.syncBatch) await update('config', C => { C.batch = cfg.batch; });   // 批号计数器持久化
     return entry;
+  }
+  // 批号计数器即用即持久化（v10.3：分配后立即写回，防文书归档失败后重号）
+  async function persistBatch(){
+    await update('config', C => { C.batch = cfg.batch; });
   }
   async function modifyDoc(u, entry, newForm, onPct){
     const folder = cfg.folders.find(f=>f.id===entry.folderId);
@@ -2615,7 +2795,7 @@ const Store = (() => {
     deletedEntries, restoreEntry, purgeEntry, probeEntries, healthCheck, forceWriteAll,
     flushDirty, dirtyNames, startFlushTimer,
     nextBatchNo, peekBatchNo, batchKinds, genDoc,
-    uploadDoc, uploadDocDual, modifyDoc, fetchEntry, fetchRaw, downloadEntry, previewEntry,
+    uploadDoc, uploadDocDual, persistBatch, modifyDoc, fetchEntry, fetchRaw, downloadEntry, previewEntry,
     backupAll, restoreBackup, snapshot, maybeAutoBackup, listAutoBackups, restoreAuto, canAutoBackup,
     LS};
 })();
@@ -2827,14 +3007,38 @@ function viewLogin(){
     const err = $('#li_err');
     if(!un || !pw){ err.textContent = '请输入账号与密码'; return; }
     const btn = $('#li_btn'); btn.disabled = true; err.textContent = '';
+    // v10.2：账号名不区分大小写（账号表含 Wangyang/IRelyonz 等大写开头账号，输小写也能登录）
+    const findU = () => Store.users.items.find(x=>!x.deleted && String(x.username).toLowerCase()===un.toLowerCase());
     try {
       // 秒开模式：数据可能仍在后台装载，点击登录时确保就绪（通常用户输入密码前已完成）
       if(window.__STORE_READY){ btn.textContent = '正在连接网盘…'; await window.__STORE_READY; btn.textContent = '身份认证 · 进入系统'; }
-      const u = Store.users.items.find(x=>x.username===un && !x.deleted);
-      if(!u) throw new Error(window.__DEGRADED ? '离线模式下本机快照无此账号。请先在「令牌修复中心」恢复网盘连接，连接恢复后即可正常登录全部账号' : '账号不存在');
+      let u = findU();
+      if(!u){
+        // v10.2：本机数据查无此账号 → 自动重连网盘、重载最新数据后再找一次
+        //（覆盖：断链期间存下的空/旧快照、降级模式、社员刚注册的新账号等场景）
+        try {
+          btn.textContent = '正在同步最新账号数据…';
+          await YST.renew();
+          await Store.loadAll();
+          window.__DEGRADED = false;
+          u = findU();
+        } catch(_){ }
+        btn.textContent = '身份认证 · 进入系统';
+      }
+      if(!u) throw new Error(window.__DEGRADED ? '离线模式下本机快照无此账号，且自动重连未成功。请在「令牌修复中心」恢复网盘连接后重试' : '账号不存在（已自动同步网盘最新数据；请核对账号名拼写与大小写，或联系社长确认账号已创建）');
       if(!u.active) throw new Error('账号已停用，请联系社长');
       if(await pwdHash(u.salt, pw) !== u.pwd) throw new Error('密码不正确');
       Session.login(u);
+      // v10.4：离线模式登录即自愈 —— 密码验证已通过说明本机数据可用，此时若仍处于降级态，
+      // 立即续期令牌并重载全量数据，不再要求用户手动打开「令牌修复中心」
+      if(window.__DEGRADED){
+        try {
+          btn.textContent = '正在恢复网盘连接…';
+          await YST.renew(); await Store.loadAll();
+          window.__DEGRADED = false;
+        } catch(_){ /* 恢复失败不阻断登录，主界面保留离线提示与修复中心入口 */ }
+        btn.textContent = '身份认证 · 进入系统';
+      }
       await Store.log(u, '登录系统', '', '', '成功');
       bootApp(true);
     } catch(e){ err.textContent = e.message || e; btn.disabled = false; }
@@ -2955,6 +3159,11 @@ function showRecoveryDlg(){
 
 /* ---------- 主页 ---------- */
 Router.reg('home', async main => {
+  // v10.4：主页数据保险 —— 内存关键数据为空（快照污染/装载中断）时先重载一次；
+  // 目录缓存兑底下离线也能读到真实数据，杜绝「主页数据全 0」假象
+  if(!(Store.users.items||[]).length || !(Store.meta.items||[]).length){
+    try { await Store.loadAll(); window.__DEGRADED = false; } catch(e){ console.warn('主页数据重载失败（保留现有展示）:', (e && e.message) || e); }
+  }
   const u = Session.user();
   const pendAcc = Store.pendingAccessFor(u).length;
   const pendVid = Store.videoPendingFor(u).length;
@@ -3284,7 +3493,7 @@ function exportDlg(id){
   if(hasW&&hasP) m.querySelector('#ex_b').onclick=async()=>{ await go('docx', '正在导出 Word 版…'); setTimeout(()=>go('pdf', '正在导出 PDF 版…'), 900); };
 }
 
-/* ---------- 上传弹框 ---------- */
+/* ---------- 上传弹框（v10.3：支持 单文件 / Word+PDF 双格式 单条目归档） ---------- */
 function uploadDlg(folder){
   const u = Session.user();
   // 密级选项：仅显示自己权限等级及以下（部门级/干事级仅在部门目录提供）
@@ -3292,7 +3501,23 @@ function uploadDlg(folder){
   // 批号：从预设文种中选择自动编号，不需手工输入
   const kinds = Store.batchKinds();
   const m = Modal.open(`<h3>上传归档 → ${U.esc(folder.name)}</h3>
-    <label class="fl">选择文件</label><input type="file" id="up_f">
+    <div class="grid2">
+      <div><label class="fl">归档方式</label><select id="up_mode">
+        <option value="single">单文件归档</option>
+        <option value="dual">Word + PDF 双格式（单条目归档）</option>
+      </select></div>
+      <div id="up_mode_desc" class="muted" style="align-self:end;padding-bottom:6px;font-size:12px;line-height:1.7">单个文件独立归档（图片 / 视频 / 文档均可）</div>
+    </div>
+    <div id="up_single_row">
+      <label class="fl">选择文件</label><input type="file" id="up_f">
+    </div>
+    <div id="up_dual_rows" style="display:none">
+      <div class="grid2">
+        <div><label class="fl">Word 版（.docx）</label><input type="file" id="up_fw" accept=".docx"></div>
+        <div><label class="fl">PDF 版（.pdf）</label><input type="file" id="up_fp" accept=".pdf"></div>
+      </div>
+      <div class="muted" style="font-size:12px;margin:-2px 0 6px">* 两份为同一文书的不同版式：成对上传后列表只显示一条，查阅/导出时可选 Word 或 PDF（与系统文书归档一致）</div>
+    </div>
     <div class="grid2">
       <div><label class="fl">归档名称</label><input id="up_n" placeholder="与文件名相同可留空"></div>
       <div><label class="fl">密级</label><select id="up_l">
@@ -3316,6 +3541,18 @@ function uploadDlg(folder){
       <input type="checkbox" id="up_e" checked style="width:auto"> CP-ABE 加密归档（推荐：密文存储，按密级属性解密）</label>
     <div class="foot"><button class="btn" id="up_c">取消</button><button class="btn pri" id="up_o">上传归档</button></div>
     <div class="muted" id="up_s" style="margin-top:8px"></div>`, {sticky:true});
+  const modeSel = m.querySelector('#up_mode');
+  const setMode = () => {
+    const dual = modeSel.value === 'dual';
+    m.querySelector('#up_single_row').style.display = dual ? 'none' : '';
+    m.querySelector('#up_dual_rows').style.display = dual ? '' : 'none';
+    m.querySelector('#up_mode_desc').textContent = dual
+      ? '同一文书的 Word 与 PDF 成对上传 · 注册表仅一条记录 · 导出时选格式'
+      : '单个文件独立归档（图片 / 视频 / 文档均可）';
+    if(dual) m.querySelector('#up_n').placeholder = '文书名称（不带扩展名，留空则取 Word 文件名）';
+    else m.querySelector('#up_n').placeholder = '与文件名相同可留空';
+  };
+  modeSel.onchange = setMode;
   m.querySelector('#up_b').onchange = () => {
     const k = m.querySelector('#up_b').value;
     m.querySelector('#up_b').title = k ? `提交时自动编号为 ${Store.peekBatchNo(k)}` : '';
@@ -3325,24 +3562,50 @@ function uploadDlg(folder){
   lsel.onchange = showLv; showLv();
   m.querySelector('#up_c').onclick = ()=>m.remove();
   m.querySelector('#up_o').onclick = async () => {
-    const f = m.querySelector('#up_f').files[0];
-    if(!f){ U.toast('请选择文件',1); return; }
-    const name = m.querySelector('#up_n').value.trim() || f.name;
-    const btn = m.querySelector('#up_o'); btn.disabled = true;
-    m.querySelector('#up_s').textContent = '读取文件中…';
+    const btn = m.querySelector('#up_o'), st = m.querySelector('#up_s');
+    const name = m.querySelector('#up_n').value.trim();
+    const batchKind = m.querySelector('#up_b').value;      // 批号：选文种后提交时自动编号
+    const form0 = {
+      level:m.querySelector('#up_l').value,
+      batchKind, batchNo:'',
+      desc:m.querySelector('#up_d').value.trim(),
+      tags:m.querySelector('#up_t').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+      encrypt:m.querySelector('#up_e').checked
+    };
+    btn.disabled = true; st.textContent = '读取文件中…';
     try {
-      const buf = await f.arrayBuffer();
-      const batchKind = m.querySelector('#up_b').value;      // 批号：选文种后提交时自动编号
-      const batchNo = batchKind ? Store.nextBatchNo(batchKind).no : '';
-      m.querySelector('#up_s').textContent = '处理与上传中…';
-      await Store.uploadDoc(u, folder, {
-        name, buf, level:m.querySelector('#up_l').value,
-        batchNo, batchKind, desc:m.querySelector('#up_d').value.trim(),
-        tags:m.querySelector('#up_t').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean),
-        encrypt:m.querySelector('#up_e').checked
-      }, p => m.querySelector('#up_s').textContent = `上传中 ${p}%`);
-      U.toast('归档成功'); m.remove(); Router.go('docs', folder.id);
-    } catch(e){ U.toast('归档失败：'+(e.message||e),1); btn.disabled=false; m.querySelector('#up_s').textContent=''; }
+      if(modeSel.value === 'dual'){
+        /* ---- Word + PDF 双格式：成对校验 → 单条目归档 ---- */
+        const fw = m.querySelector('#up_fw').files[0], fp = m.querySelector('#up_fp').files[0];
+        if(!fw || !fp){ throw new Error('双格式归档需同时选择 Word（.docx）与 PDF（.pdf）两份文件'); }
+        if(!/\.docx$/i.test(fw.name)) throw new Error('「Word 版」请选择 .docx 文件（当前：' + fw.name + '）');
+        if(!/\.pdf$/i.test(fp.name))  throw new Error('「PDF 版」请选择 .pdf 文件（当前：' + fp.name + '）');
+        const baseName = name || fw.name.replace(/\.docx$/i, '');
+        if(!baseName) throw new Error('请填写归档名称');
+        st.textContent = '读取两份文件中…';
+        const [docxBuf, pdfBuf] = await Promise.all([fw.arrayBuffer(), fp.arrayBuffer()]);
+        form0.batchNo = batchKind ? Store.nextBatchNo(batchKind).no : '';
+        st.textContent = '成对加密与上传中…';
+        await Store.uploadDocDual(u, folder, Object.assign({}, form0, {
+          baseName, docxBuf, pdfBuf,
+          logAction:'上传归档', logDetail:'Word/PDF 双格式 · 单条目归档（手动上传）'
+        }), p => st.textContent = `上传中 ${p}%`);
+        U.toast('双格式归档成功（Word + PDF 单条目）'); m.remove(); Router.go('docs', folder.id);
+      } else {
+        /* ---- 单文件归档（原有路径） ---- */
+        const f = m.querySelector('#up_f').files[0];
+        if(!f){ throw new Error('请选择文件'); }
+        const fname = name || f.name;
+        st.textContent = '处理与上传中…';
+        form0.batchNo = batchKind ? Store.nextBatchNo(batchKind).no : '';
+        await Store.uploadDoc(u, folder, Object.assign({}, form0, {name:fname, buf:await f.arrayBuffer()}),
+          p => st.textContent = `上传中 ${p}%`);
+        U.toast('归档成功'); m.remove(); Router.go('docs', folder.id);
+      }
+    } catch(e){
+      U.toast('归档失败：'+(e.message||e),1);
+      btn.disabled=false; st.textContent='';
+    }
   };
 }
 
@@ -4765,34 +5028,42 @@ function adminPts(el){
     if(genDoc && !topic){ U.toast('请填写本次调整主题（用于通知文书标题）',1); btn.disabled=false; return; }
     const u = Session.user();
     try {
-      // 1) 取批号 → 批量记账 + 逐人通知
+      // 1) 取批号（v10.3：分配即持久化，防文书阶段失败后重号） → 批量记账 + 逐人通知
       let no = '';
-      if(genDoc) no = Store.nextBatchNo('通').no;
+      if(genDoc){ no = Store.nextBatchNo('通').no; await Store.persistBatch().catch(()=>{}); }
       rows.forEach(r => r.batchNo = no);
       await Store.addPointsBatch(u, rows, {record:$('#pt_rec').checked});
       $('#pt_s').textContent = `已记入台账并通知 ${rows.length} 人`;
       // 2) 一份汇总通知文书（Word/PDF 双格式 · 公开级归档，全员可查）
+      //    v10.3：文书阶段独立 try/catch —— 记账已成功，归档失败必须显式告知，绝不静默吞掉
       if(genDoc){
-        $('#pt_s').textContent = '正在生成 Word / PDF 汇总通知…';
-        const title = `关于${topic}的积分调整通知`;
-        const paras = [
-          {t:`根据《社员积分奖惩章程（试行）》（信摄秘〔2026〕办字第004号）有关规定，经社长室审议批准，现将本次积分调整事项通知如下：`, st:'body'},
-          {t:'一、调整明细', st:'h1'},
-          ...rows.map((r,i)=>({t:`（${CN[i]||i+1}）${r.user.displayName}${r.user.gradeClass?'（'+r.user.gradeClass+'）':''}：${r.item[1]}，${r.delta>0?'+':''}${r.delta} 分（${r.item[2]}）。事由：${r.reason}。`, st:'body'})),
-          {t:'二、生效与复核', st:'h1'},
-          {t:'以上调整自签发之日起生效，并已同步记入全社积分台账，与本通知一并公示。当事人对调整有异议的，可自公示之日起 3 日内向秘书处提出复核申请。', st:'body'}
-        ];
-        const pack = await Office.docPack({title, batchNo:no, to:'全体社员、各部门：', paras});
-        const base = `${no} ${title}`;
-        if($('#pt_dl').checked) Office.downloadPack(pack, base);
-        const folder = (Store.cfg.folders||[]).find(f=>f.kind==='common')
-          || (Store.cfg.folders||[]).find(f=>f.kind==='sec') || (Store.cfg.folders||[])[0];
-        if(folder) await Store.uploadDocDual(u, folder, {
-          baseName:base, docxBuf:pack.docx, pdfBuf:pack.pdf, batchNo:no,
-          level:'公开级', desc:`积分调整通知（${topic}）`, tags:['积分','通知','文书','公示'], syncBatch:true,
-          logAction:'出具积分调整通知', logDetail:`${rows.length} 人 · Word/PDF 双格式公开归档`});
-        await Store.log(u, '出具积分调整通知', no, `${title}（${rows.length} 人 · 公开级归档）`, '成功');
-        U.toast('汇总通知已生成并公开归档：' + no);
+        try {
+          $('#pt_s').textContent = '正在生成 Word / PDF 汇总通知…';
+          const title = `关于${topic}的积分调整通知`;
+          const paras = [
+            {t:`根据《社员积分奖惩章程（试行）》（信摄秘〔2026〕办字第004号）有关规定，经社长室审议批准，现将本次积分调整事项通知如下：`, st:'body'},
+            {t:'一、调整明细', st:'h1'},
+            ...rows.map((r,i)=>({t:`（${CN[i]||i+1}）${r.user.displayName}${r.user.gradeClass?'（'+r.user.gradeClass+'）':''}：${r.item[1]}，${r.delta>0?'+':''}${r.delta} 分（${r.item[2]}）。事由：${r.reason}。`, st:'body'})),
+            {t:'二、生效与复核', st:'h1'},
+            {t:'以上调整自签发之日起生效，并已同步记入全社积分台账，与本通知一并公示。当事人对调整有异议的，可自公示之日起 3 日内向秘书处提出复核申请。', st:'body'}
+          ];
+          const pack = await Office.docPack({title, batchNo:no, to:'全体社员、各部门：', paras});
+          const base = `${no} ${title}`;
+          if($('#pt_dl').checked) Office.downloadPack(pack, base);
+          const folder = (Store.cfg.folders||[]).find(f=>f.kind==='common')
+            || (Store.cfg.folders||[]).find(f=>f.kind==='sec') || (Store.cfg.folders||[])[0];
+          if(!folder) throw new Error('未找到可归档目录（系统目录配置异常，请刷新页面或联系技术组）');
+          await Store.uploadDocDual(u, folder, {
+            baseName:base, docxBuf:pack.docx, pdfBuf:pack.pdf, batchNo:no,
+            level:'公开级', desc:`积分调整通知（${topic}）`, tags:['积分','通知','文书','公示'], syncBatch:true,
+            logAction:'出具积分调整通知', logDetail:`${rows.length} 人 · Word/PDF 双格式公开归档`});
+          await Store.log(u, '出具积分调整通知', no, `${title}（${rows.length} 人 · 公开级归档）`, '成功');
+          U.toast('汇总通知已生成并公开归档：' + no);
+        } catch(docErr){
+          const msg = String(docErr && (docErr.message || docErr));
+          await Store.log(u, '出具积分调整通知', no, `文书归档失败：${msg.slice(0,120)}`, '失败').catch(()=>{});
+          U.toast('⚠ 积分已记入台账，但通知文书归档失败：' + msg + '（积分不受影响；请重试或联系技术组补发文书）', 1);
+        }
       }
       U.toast('批量调整完成');
       rows.length = 0;
@@ -4982,10 +5253,51 @@ function syncEngineSignal(){
     const isSvgHost = IS_SVG_DOC && onYsepan && /\.svg(\?|$)/i.test(location.pathname + location.search);
     // v9.1 防降级回写：旧引擎（verRank 更小）不得把自己的旧地址覆盖到云端
     // （v9.1 事故：v7 引擎登录后回写，导致 engineUrl 从 v9 倒退回 v7）
-    if(isSvgHost && location.href !== C.engineUrl && verRank(APP_VER) >= verRank(C.engineVer)){
-      Store.upd('config', X => { X.engineUrl = location.href; X.engineVer = APP_VER; X.engineTs = Date.now(); }).catch(()=>{});
+    // v10.3 追加：本机目录表为空（config 启动读取失败）时一律不回写 —— 配合 store 防踩踏合并双保险
+    if(isSvgHost && location.href !== C.engineUrl && verRank(APP_VER) >= verRank(C.engineVer) && (C.folders||[]).length){
+      /* v10.4 提速：同步节流 —— 同一引擎地址 6 小时内不重复回写
+       * （省去每次启动的 config 读+写+清理约 3 次 API 往返） */
+      let last = 0; try{ last = +localStorage.getItem('fzsy_ses_ts') || 0; }catch(_){}
+      if(Date.now() - last < 6*3600*1000) return;
+      Store.upd('config', X => { X.engineUrl = location.href; X.engineVer = APP_VER; X.engineTs = Date.now(); })
+        .then(() => { try{ localStorage.setItem('fzsy_ses_ts', String(Date.now())); }catch(_){} })
+        .catch(() => {});
     }
   }catch(e){}
+}
+/* ---------- v10.2 引擎自更新检查 ----------
+ * 云端 config.engineTs 比本引擎构建时间戳（BUILD_TS）新且版本号不同 → 顶部升级提示。
+ * 以后部署新引擎：网盘传完 SVG+config 即对直链/iframe 用户即时生效；
+ * 启动器内嵌用户另经 bootpool 指针追新（双保险）。 */
+async function checkEngineUpdate(){
+  try{
+    if(!window.BUILD_TS || !Store.webTemp) return;
+    await YST.boot();
+    const r = await YST.wjdq(Store.webTemp.bh || Store.webTemp);   // v10.3：webTemp 为 {bh} 对象，旧写法直传导致 HTTP 400
+    const f = ((r && r.lb) || []).filter(x => x && x.wjm === 'config.json').sort((a,b)=>b.bh-a.bh)[0];
+    if(!f || !r.ml || !r.ml.xzpz) return;
+    const c = await YST.readJSON(YST.dlUrl(f, r.ml.xzpz));
+    if(!c || !c.engineUrl || !(c.engineTs > window.BUILD_TS) || String(c.engineVer||'') === APP_VER) return;
+    let skip = null; try{ skip = localStorage.getItem('fzsy_upd_skip'); }catch(_){}
+    if(skip === String(c.engineVer)) return;
+    const host = APPROOT(); if(!host) return;
+    const bar = mk('div');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;display:flex;gap:12px;align-items:center;justify-content:center;background:#1d4ed8;color:#fff;font:13px/1.7 system-ui,-apple-system,sans-serif;padding:7px 44px 7px 14px;box-shadow:0 2px 10px rgba(0,0,0,.3)';
+    const txt = mk('span'); txt.textContent = '🆕 系统有新版本 ' + (c.engineVer||'') + '（当前 ' + APP_VER + '）';
+    const go = mk('button'); go.textContent = '立即升级';
+    go.style.cssText = 'border:0;border-radius:6px;background:#fff;color:#1d4ed8;font:600 13px/1.6 system-ui,sans-serif;padding:3px 14px;cursor:pointer';
+    /* v10.4：6 秒倒计时自动跳转（更新必达）—— 旧入口不再滞留旧版；点 ✕ 可取消并记忆 */
+    const cd = mk('span'); cd.style.cssText = 'font:12px/1.6 system-ui,sans-serif;opacity:.85';
+    let left = 6;
+    const timer = setInterval(() => { left--; if(left <= 0){ clearInterval(timer); go.click(); } else cd.textContent = left + 's 后自动跳转'; }, 1000);
+    const jump = () => { clearInterval(timer); try{ localStorage.setItem('fzsy_upd_skip', String(c.engineVer)); }catch(_){ } location.href = c.engineUrl; };
+    go.onclick = jump;
+    const x = mk('span'); x.textContent = '✕';
+    x.style.cssText = 'position:absolute;right:14px;top:50%;transform:translateY(-50%);cursor:pointer;opacity:.75';
+    x.onclick = () => { clearInterval(timer); try{ localStorage.setItem('fzsy_upd_skip', String(c.engineVer)); }catch(_){ } bar.remove(); };
+    bar.appendChild(txt); bar.appendChild(go); bar.appendChild(cd); bar.appendChild(x);
+    host.appendChild(bar);
+  }catch(e){ console.warn('引擎自更新检查失败(忽略):', (e && e.message) || e); }
 }
 async function bootApp(skipBoot){
   Theme.init();
@@ -5011,6 +5323,7 @@ async function bootApp(skipBoot){
         try { syncEngineSignal(); } catch(_2){}
         return true;
       })();
+      setTimeout(() => { checkEngineUpdate().catch(()=>{}); }, 4000);   // v10.2 引擎自更新检查（后台异步，不阻塞启动）
       if(!sessHint || !sessHint.id){
         viewLogin();                   // 秒开登录页（数据装载并行，点击登录时自动等待就绪）
         await window.__STORE_READY;
