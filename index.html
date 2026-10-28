@@ -755,8 +755,8 @@ const YST = (() => {
      SRV = Vercel 后端地址。后端部署完成后，把 YOUR-PROJECT 替换为你的 Vercel 项目名。
      · 本页面托管在 GitHub Pages（beixianggumao.github.io）→ 跨域调用该地址（后端 CORS 白名单已放行）
      · 若直接在 Vercel 域名打开（兜底线路）→ 自动同源，无需修改 */
-  const SRV = location.hostname.endsWith('.github.io') ? 'https://negative-server.vercel.app' : location.origin;
-  const API = SRV + '/api/ys/';  /* Node.js 服务端代理（Vercel） */
+  const SRV = location.hostname.endsWith('.github.io') ? 'https://www.beixianggumao.duckdns.org' : location.origin;
+  const API = SRV + '/api/ys?ep=';  /* Node.js 服务端代理（Vercel）—— 查询参数式，规避方括号路由文件 */
   const DLMC = 'beixianggumao';
   // 引导凭证（游客JWT + 管理密码），管理密码分段混淆存放
   /* 管理密码已迁移至服务端环境变量 YST_ADMIN_PWD，客户端不再持有任何凭据（安全修复） */
